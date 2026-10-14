@@ -2,6 +2,14 @@ import { CELL, ENEMY, GRID_H, GRID_W, LEVEL_PX, ORIGIN_Y, VIEW_H, VIEW_W, tune }
 import { isAbyss } from './terrain';
 import type { Enemy, GameEvent, World } from './world';
 
+/** 조준: 평면 조준점 + 실제 커서 화면 위치 + 잡힌 적 */
+export interface Aim {
+  x: number;
+  y: number;
+  cursor: { x: number; y: number } | null;
+  target: Enemy | null;
+}
+
 // 측량 잉크 팔레트: 고도마다 다른 형광색 등고선, 어두운 남색 지면, 심연 테두리는 경고 적색
 export const LINE = ['#2f7bff', '#19f5c8', '#6cff4f', '#e8ff3a', '#ffb02e', '#ff4fa3', '#b77bff'];
 const TOP = ['#090b17', '#10142a', '#171d3c', '#1f274e', '#283161', '#313b73', '#3b4686'];
@@ -216,7 +224,7 @@ export class Renderer {
     }
   }
 
-  draw(world: World, dt: number, aim: { x: number; y: number } | null): void {
+  draw(world: World, dt: number, aim: Aim | null): void {
     const ctx = this.ctx;
     this.clock += dt;
 
@@ -495,7 +503,7 @@ export class Renderer {
   }
 
   /** 조준: 칼날이 닿을 선과, 그 선이 벨 등고선 위치를 미리 보여 준다 */
-  private drawAim(world: World, aim: { x: number; y: number }): void {
+  private drawAim(world: World, aim: Aim): void {
     const ctx = this.ctx;
     const p = world.player;
     let dx = aim.x - p.x;
@@ -518,9 +526,20 @@ export class Renderer {
         ctx.fillRect(cx, cyy - 2, 1, 5);
       }
     }
-    // 조준점: 측량 십자
-    const ax = Math.round(aim.x);
-    const ay = sy(aim.y, p.z);
+    // 조준이 잡힌 적: 몸통을 감싸는 괄호
+    if (aim.target) {
+      const e = aim.target;
+      const ex = Math.round(e.x);
+      const feet = sy(e.y, e.z);
+      ctx.fillStyle = '#ffffff';
+      for (const [bx, by, w, h] of [
+        [ex - 7, feet - 15, 3, 1], [ex - 7, feet - 15, 1, 3], [ex + 5, feet - 15, 3, 1], [ex + 7, feet - 15, 1, 3],
+        [ex - 7, feet + 2, 3, 1], [ex - 7, feet, 1, 3], [ex + 5, feet + 2, 3, 1], [ex + 7, feet, 1, 3],
+      ]) ctx.fillRect(bx, by, w, h);
+    }
+    // 조준점: 측량 십자(실제 커서 자리)
+    const ax = Math.round(aim.cursor ? aim.cursor.x : aim.x);
+    const ay = aim.cursor ? Math.round(aim.cursor.y) : sy(aim.y, p.z);
     ctx.fillStyle = '#19f5c8';
     ctx.fillRect(ax - 4, ay, 3, 1);
     ctx.fillRect(ax + 2, ay, 3, 1);

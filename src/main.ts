@@ -259,7 +259,7 @@ function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (started && !paused && world.mode === 'play') {
-    controls.fill(input, world.player);
+    controls.fill(input, world.player, world.enemies);
     acc += dt;
     let n = 0;
     while (acc >= FIXED_DT && n < 6) {
@@ -271,14 +271,14 @@ function frame(now: number): void {
     if (world.isOver()) showOver();
   } else if (started) {
     // 정지 중에도 조준은 갱신
-    controls.fill(input, world.player);
+    controls.fill(input, world.player, world.enemies);
     input.cut = input.dash = input.dashToAim = false;
   }
   const events = world.events;
   world.events = [];
   renderer.consume(events, world);
   handleEvents(events);
-  renderer.draw(world, dt, started && controls.mouse ? { x: input.aimX, y: input.aimY } : null);
+  renderer.draw(world, dt, started && controls.mouse ? { x: input.aimX, y: input.aimY, cursor: controls.cursorView, target: controls.target } : null);
   updateHud(dt);
   requestAnimationFrame(frame);
 }
@@ -291,6 +291,8 @@ declare global {
       snapshot: () => ReturnType<World['snapshot']> & { started: boolean; paused: boolean; tune: Tune };
       /** 카메라 상태(줌·흔들림) 관찰 */
       camera: () => { zoom: number; shakeX: number; shakeY: number };
+      /** 조준이 잡힌 적 id(없으면 null) */
+      aimTarget: () => number | null;
       /** 평면 좌표(px)·고도 → 브라우저 화면 좌표. 고도를 생략하면 그 지점의 지형 높이 */
       project: (x: number, y: number, z?: number) => { x: number; y: number };
       heightAt: (cx: number, cy: number) => number;
@@ -301,6 +303,7 @@ declare global {
 window.__cc = {
   snapshot: () => ({ ...world.snapshot(), started, paused, tune: { ...tune } }),
   camera: () => ({ zoom: renderer.cam.zoom, shakeX: renderer.cam.shakeX, shakeY: renderer.cam.shakeY }),
+  aimTarget: () => controls.target?.id ?? null,
   project: (x, y, z) => {
     const r = canvas.getBoundingClientRect();
     const lv = z ?? Math.max(0, world.terrain.heightAt(x, y));

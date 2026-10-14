@@ -122,44 +122,59 @@ test('이동 방해: 언덕 바깥 고리를 베면 꼭대기의 적이 구덩�
   expect(errors).toEqual([]);
 });
 
-test('핵심 루프: 측량 절단 → 고립 → 지형 환원(7초) → 에어본 → 공중 추가타', async ({ page }) => {
-  const errors = await openGame(page, 'combo');
-  // ① 측량 절단: 언덕 바깥 고리를 베어 꼭대기를 구덩이로
-  await cutAt(page, cellC(18), cellC(26));
-  await expect.poll(() => heightAt(page, 18, 26), { message: '꼭대기 침하' }).toBe(1);
-  // ② 다가간다(심연 가장자리에서 걸음이 멈춘다)
-  await page.keyboard.down('KeyA');
-  await page.waitForTimeout(1200);
-  await page.keyboard.up('KeyA');
-  const s1 = await snap(page);
-  expect(s1.player.hp).toBe(5);
-  const e0 = s1.enemies[0];
-  expect(e0.state).not.toBe('launched');
-  await aim(page, e0.x, e0.y);
-  // ③ 7초 환원 순간 적이 뜨기를 페이지 안에서 프레임 단위로 기다린다
-  const launchedAt = await page.evaluate(
-    () =>
-      new Promise<number>((resolve) => {
-        const tick = () => {
-          const s = window.__cc.snapshot();
-          if (s.enemies[0]?.state === 'launched') return resolve(s.time);
-          requestAnimationFrame(tick);
-        };
-        tick();
-      }),
-  );
-  // ④ 무방비 동안 실제 클릭으로 추가타
-  await page.mouse.down();
-  await page.mouse.up();
-  await expect.poll(async () => (await snap(page)).stats.airHits, { message: '공중 추가타' }).toBe(1);
-  const s2 = await snap(page);
-  expect(launchedAt, '환원은 절단 뒤 약 7초(게임 시간)').toBeGreaterThan(s2.tune.restoreSec - 0.5);
-  expect(s2.stats.launches).toBeGreaterThanOrEqual(1);
-  await expect(page.getByTestId('feed')).toContainText(/공중 (추가타|처치)/);
-  await shot(page, '11-combo-airhit');
-  expect(await hudGeometry(page)).toEqual([]);
-  expect(errors).toEqual([]);
-});
+for (const calm of [false, true]) {
+  test(`핵심 루프: 측량 절단 → 고립 → 지형 환원(7초) → 에어본 → 떠오른 적을 보이는 자리에서 다시 조준해 공중 추가타${calm ? ' (연출 줄이기: 줌 끔)' : ' (줌 켬)'}`, async ({ page }) => {
+    const errors = await openGame(page, 'combo');
+    if (calm) {
+      await page.keyboard.press('KeyT');
+      await page.getByTestId('reduce-motion').click();
+      await page.keyboard.press('KeyT');
+    }
+    // ① 측량 절단: 언덕 바깥 고리를 베어 꼭대기를 구덩이로
+    await cutAt(page, cellC(18), cellC(26));
+    await expect.poll(() => heightAt(page, 18, 26), { message: '꼭대기 침하' }).toBe(1);
+    // ② 다가간다(심연 가장자리에서 걸음이 멈춘다)
+    await page.keyboard.down('KeyA');
+    await page.waitForTimeout(1200);
+    await page.keyboard.up('KeyA');
+    const s1 = await snap(page);
+    expect(s1.player.hp).toBe(5);
+    expect(s1.enemies[0].state).not.toBe('launched');
+    // 조준을 일부러 빈 땅에 둔다(환원 전 조준을 유지해 맞히는 경로가 아니게)
+    await aim(page, s1.player.x - 20, s1.player.y + 25);
+    // ③ 환원으로 떠오른 적이 지면보다 확실히 높이 올라간 순간, 그 적이 화면에 그려진 몸통 위치를 얻는다
+    const target = await page.evaluate(
+      () =>
+        new Promise<{ x: number; y: number; id: number; z: number; time: number }>((resolve) => {
+          const r = (document.getElementById('game') as HTMLCanvasElement).getBoundingClientRect();
+          const tick = () => {
+            const s = window.__cc.snapshot();
+            const e = s.enemies[0];
+            if (e && e.state === 'launched' && e.z > 5) {
+              const feet = window.__cc.project(e.x, e.y, e.z);
+              return resolve({ x: feet.x, y: feet.y - (6 * r.height) / 270, id: e.id, z: e.z, time: s.time });
+            }
+            requestAnimationFrame(tick);
+          };
+          tick();
+        }),
+    );
+    // ④ 보이는 몸통으로 마우스를 옮기고, 조준이 그 적에 잡힌 것을 확인한 뒤 클릭
+    await page.mouse.move(target.x, target.y);
+    const locked = await page.evaluate(() => new Promise<number | null>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(window.__cc.aimTarget())))));
+    expect(locked, '보이는 공중 적에 조준이 잡힌다').toBe(target.id);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect.poll(async () => (await snap(page)).stats.airHits, { message: '공중 추가타' }).toBe(1);
+    const s2 = await snap(page);
+    expect(target.time, '환원은 절단 뒤 약 7초(게임 시간)').toBeGreaterThan(s2.tune.restoreSec - 0.5);
+    if (calm) expect((await page.evaluate(() => window.__cc.camera())).zoom).toBe(1);
+    await expect(page.getByTestId('feed')).toContainText(/공중 (추가타|처치)/);
+    if (!calm) await shot(page, '11-combo-airhit');
+    expect(await hudGeometry(page)).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
 
 test('카메라: 고지대에서 대시로 뛰어내리면 미세하게 줌아웃했다가 돌아온다', async ({ page }) => {
   const errors = await openGame(page, 'dash');
