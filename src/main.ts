@@ -135,7 +135,8 @@ function onZoneClear(): void {
     phase = 'complete';
     $('journey-stats').innerHTML =
       `걸린 시간 ${Math.round(totals.time)}초 · 측량 절단 ${totals.cuts}회<br>` +
-      `지형 처치 ${totals.terrainKills} · 공중 처치 ${totals.airKills} · 칼날 처치 ${totals.bladeKills} · 공중 추가타 ${totals.airHits}`;
+      `지형 처치 ${totals.terrainKills} · 공중 처치 ${totals.airKills} · 칼날 처치 ${totals.bladeKills} · 공중 추가타 ${totals.airHits}<br>` +
+      `환원 구역: 에어본 ${s.launches} · 공중 추가타 ${s.airHits} · 공중 처치 ${s.kills.air} · 받은 피해 ${s.hurt}`;
     journeyClearEl.classList.remove('hidden');
   } else {
     phase = 'zoneClear';
@@ -145,7 +146,7 @@ function onZoneClear(): void {
       const g = surveyGrade(results[zoneIndex]!);
       $('zone-clear-grade').innerHTML = `측량 평가 <b class="grade-${g.grade}">${g.grade}</b> — 지형으로 쓰러뜨림 ${g.terrain}/${g.total} · 받은 피해 ${results[zoneIndex]!.hurt}`;
     } else $('zone-clear-grade').textContent = '';
-    $('zone-clear-next').textContent = `다음: 구역 ${zoneIndex + 2} — ${ZONES[zoneIndex + 1].name}`;
+    $('zone-clear-next').textContent = `다음: 구역 ${zoneIndex + 2} — ${ZONES[zoneIndex + 1].name} · ${ZONES[zoneIndex + 1].theme}`;
     zoneClearEl.classList.remove('hidden');
   }
 }
@@ -276,9 +277,8 @@ function updateHud(dt: number): void {
     $('hud-wave').textContent = `구역 ${zoneIndex + 1}/${ZONES.length} · ${z.name}`;
     const st = zoneStatus(z, world, zstate);
     $('hud-goal').textContent = `목표: ${st.label}`;
-    // 다음 단계가 자리를 요구하면 그 자리에 안내 표지
-    const next = zstate.pending && z.beats ? z.beats[zstate.beat + 1] : undefined;
-    world.marker = next?.trigger ?? null;
+    // 다음 단계가 자리를 요구하거나(트리거) 출현 지점에서 물러나야 하면 갈 곳에 안내 표지
+    world.marker = st.marker ?? null;
     hintEl.textContent = st.hint;
     hintEl.classList.toggle('hidden', !st.hint || phase !== 'play');
   } else {
@@ -386,7 +386,7 @@ function frame(now: number): void {
         const z = ZONES[zoneIndex];
         const beat = zoneTick(z, world, zstate);
         if (beat !== null && z.beats) {
-          pushFeed(`측량 ${beat + 1}/${z.beats.length} — ${z.beats[beat].name}`);
+          pushFeed(`${z.beatWord ?? '측량'} ${beat + 1}/${z.beats.length} — ${z.beats[beat].name}`);
           sfx.launch();
         }
         if (zoneStatus(z, world, zstate).done) {

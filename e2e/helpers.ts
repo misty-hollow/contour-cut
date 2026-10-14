@@ -86,6 +86,12 @@ export async function hudGeometry(page: Page): Promise<string[]> {
       const el = document.getElementById(id)!;
       if (el.scrollWidth > el.clientWidth + 1) problems.push(`${id} 가로 넘침`);
     }
+    // 힌트 줄은 한 줄이어야 한다(두 줄로 꺾이면 끝 글자만 다음 줄로 넘어가 아래 HUD·지형을 가린다)
+    if (ids.includes('hint')) {
+      const cs = getComputedStyle(hint!);
+      const lines = (hint!.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) / parseFloat(cs.lineHeight);
+      if (lines > 1.5) problems.push(`hint ${Math.round(lines)}줄`);
+    }
     return problems;
   });
 }
