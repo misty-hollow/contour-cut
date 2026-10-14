@@ -279,6 +279,16 @@ async function zone3Bot(page: Page, timeoutMs: number, review: boolean): Promise
         lastDash = s.time;
         continue;
       }
+      // ⓪-2 회피: 칼날 거리 밖의 사격형이 나를 조준하는 동안(0.6초)은 탄 방향과 직각으로 비켜 걷는다
+      //       (탄은 조준을 시작한 때의 내 자리로 날아온다 — 사람도 피하는 방식). 환원대에서 끌어들이는 중이면 자리를 지킨다
+      const aiming = live.find((e) => e.kind === 'shooter' && e.state === 'windup' && dist(e) > 40);
+      if (aiming && !luringNow) {
+        const d = dist(aiming) || 1;
+        const side = aiming.id % 2 === 0 ? 1 : -1;
+        await keys.toward(p, p.x + (side * -(aiming.y - p.y) * 30) / d, p.y + (side * (aiming.x - p.x) * 30) / d);
+        await page.waitForTimeout(30);
+        continue;
+      }
       // ② 칼날 거리 안의 적(높이와 무관 — 높은 곳에 올라선 적은 칼날이 그 땅째 벤다). 단, 가두기 구덩이 안의 감시자는
       //    환원까지 두고(심연 너머로 베면 내 발밑이 무너진다), 베어 낸 환원대 위에서 적을 끌어들이는 동안은 밀쳐 내지 않는다(체력이 넉넉할 때)
       const h1 = Z3.hills[0];
@@ -360,15 +370,18 @@ async function zone3Bot(page: Page, timeoutMs: number, review: boolean): Promise
   }
 }
 
-async function clearZone3(page: Page, review = false): Promise<Zone3Run & { attempts: number }> {
+async function clearZone3(page: Page, review = false): Promise<Zone3Run & { attempts: number; deaths: string[] }> {
+  // 쓰러진 시도마다 마지막 상태를 남긴다(CI에서 자동 조작이 어디서 쓰러지는지 진단)
+  const deaths: string[] = [];
   for (let attempt = 1; attempt <= 3; attempt++) {
     const r = await zone3Bot(page, 150_000, review);
-    if (r.result === 'clear') return { ...r, attempts: attempt };
+    if (r.result === 'clear') return { ...r, attempts: attempt, deaths };
     expect(r.result, `구역 3 실패는 게임 오버뿐이어야 한다 — 마지막 상태 ${r.last}`).toBe('over');
+    deaths.push(r.last);
     await page.keyboard.press('KeyR');
     await expect.poll(async () => (await snap(page)).mode).toBe('play');
   }
-  throw new Error('구역 3을 3번 안에 정리하지 못함');
+  throw new Error(`구역 3을 3번 안에 정리하지 못함 — 쓰러진 상태: ${deaths.join(' // ')}`);
 }
 
 test('첫 여정 완주: 타이틀 → 구역 1 균열 지대 → 구역 2 접힘 협곡 → 구역 3 환원 구역 → 최종 클리어 → R로 처음부터', async ({ page }) => {
@@ -534,7 +547,7 @@ test('구역 3 단독: 가두기 → 환원대 → 대환원을 실제 입력으
   expect(s.stats.launches, '지형 환원 에어본').toBeGreaterThan(0);
   expect(s.stats.airHits, '공중 추가타').toBeGreaterThan(0);
   expect(z3.pitAirHits, '가두기: 구덩이에 가둔 감시자를 환원 순간 공중 추가타').toBeGreaterThan(0);
-  test.info().annotations.push({ type: '구역 3', description: `시도 ${z3.attempts} · 가두기 공중 추가타 ${z3.pitAirHits} · 환원대 에어본 ${z3.tableLaunches} · 전체 에어본 ${s.stats.launches} · 공중 추가타 ${s.stats.airHits} · 공중 처치 ${s.stats.kills.air} · 칼날 처치 ${s.stats.kills.blade} · 지형 처치 ${s.stats.kills.fall + s.stats.kills.abyss} · 피해 ${s.stats.hurt} · ${Math.round(s.time)}초` });
+  test.info().annotations.push({ type: '구역 3', description: `시도 ${z3.attempts} · 가두기 공중 추가타 ${z3.pitAirHits} · 환원대 에어본 ${z3.tableLaunches} · 전체 에어본 ${s.stats.launches} · 공중 추가타 ${s.stats.airHits} · 공중 처치 ${s.stats.kills.air} · 칼날 처치 ${s.stats.kills.blade} · 지형 처치 ${s.stats.kills.fall + s.stats.kills.abyss} · 피해 ${s.stats.hurt} · ${Math.round(s.time)}초${z3.deaths.length ? ` · 쓰러짐: ${z3.deaths.join(' // ')}` : ''}` });
   expect(errors).toEqual([]);
 });
 
