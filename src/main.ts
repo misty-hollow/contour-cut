@@ -2,6 +2,7 @@ import './style.css';
 import { Sfx } from './audio';
 import { FIXED_DT, LEVEL_PX, ORIGIN_Y, PLAYER, VIEW_H, VIEW_W, tune, type Tune } from './config';
 import { Controls } from './input';
+import { journeyTotals, parseZoneParam, zoneResult, ZONES, zoneStatus, zoneTick, type ZoneResult } from './journey';
 import { DEFAULT_SEED, SCENARIOS } from './maps';
 import { Renderer } from './render';
 import { emptyInput, World, type GameEvent } from './world';
@@ -27,7 +28,21 @@ if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
 const sfx = new Sfx();
 const input = emptyInput();
 
-let world = new World(scenario, seed);
+// 플레이 방식: 첫 여정(기본) · 무한 웨이브 · 실험 시나리오(?scenario=)
+type PlayMode = 'journey' | 'waves' | 'scenario';
+type Phase = 'play' | 'zoneClear' | 'complete';
+let mode: PlayMode = scenario ? 'scenario' : 'journey';
+const firstZone = parseZoneParam(params.get('zone'));
+let zoneIndex = firstZone;
+let phase: Phase = 'play';
+/** 구역별 결과. 같은 구역을 다시 깨면 덮어써서 최종 집계에 두 번 들어가지 않는다 */
+let results: (ZoneResult | undefined)[] = [];
+
+function makeWorld(): World {
+  return mode === 'journey' ? new World(null, seed, ZONES[zoneIndex].build()) : new World(scenario, seed);
+}
+
+let world = makeWorld();
 let started = false;
 let paused = false;
 let acc = 0;
@@ -51,27 +66,99 @@ const help = $('help');
 const tunePanel = $('tune');
 const pauseEl = $('pause');
 const over = $('over');
-if (scenario) $('scenario-note').textContent = `실험 시나리오: ${scenario} (웨이브 없음)`;
+const zoneClearEl = $('zone-clear');
+const journeyClearEl = $('journey-clear');
+const banner = $('zone-banner');
+if (scenario) {
+  $('scenario-note').textContent = `실험 시나리오: ${scenario} (웨이브 없음)`;
+  $('start').textContent = '클릭하여 측량 시작';
+  $('start-waves').classList.add('hidden');
+} else if (firstZone > 0) {
+  $('start').textContent = `첫 여정 — 구역 ${firstZone + 1}부터 시작`;
+}
 
-function start(): void {
+function start(asWaves = false): void {
   sfx.unlock();
   started = true;
   title.classList.add('hidden');
+  if (asWaves) {
+    mode = 'waves';
+    world = makeWorld();
+  } else if (mode === 'journey') {
+    enterZone(zoneIndex);
+  }
   last = performance.now();
 }
-$('start').addEventListener('click', start);
+$('start').addEventListener('click', () => start());
+$('start-waves').addEventListener('click', () => start(true));
+$('next-zone').addEventListener('click', () => nextZone());
 
-function restart(newSeed?: number): void {
-  if (newSeed !== undefined) seed = newSeed;
-  world = new World(scenario, seed);
+/** 구역 시작(또는 재도전): 지형·적·탄·타이머·연출을 모두 새로 만든다 */
+function enterZone(i: number): void {
+  zoneIndex = i;
+  phase = 'play';
+  world = makeWorld();
+  resetTransient();
+  zoneClearEl.classList.add('hidden');
+  journeyClearEl.classList.add('hidden');
+  const z = ZONES[i];
+  banner.innerHTML = `<b>구역 ${i + 1} — ${z.name}</b><br>${z.goal}`;
+  banner.classList.remove('hidden', 'fade');
+  bannerT = 3;
+}
+let bannerT = 0;
+
+function resetTransient(): void {
   over.classList.add('hidden');
+  setPaused(false);
   feed.length = 0;
   controls.clear();
+  renderer.resetFx();
   acc = 0;
 }
 
+function nextZone(): void {
+  if (phase !== 'zoneClear') return;
+  enterZone(zoneIndex + 1);
+}
+
+function onZoneClear(): void {
+  const s = world.stats;
+  results[zoneIndex] = zoneResult(world);
+  const totals = journeyTotals(results);
+  const z = ZONES[zoneIndex];
+  sfx.shock();
+  if (zoneIndex === ZONES.length - 1) {
+    phase = 'complete';
+    $('journey-stats').innerHTML =
+      `걸린 시간 ${Math.round(totals.time)}초 · 측량 절단 ${totals.cuts}회<br>` +
+      `지형 처치 ${totals.terrainKills} · 공중 처치 ${totals.airKills} · 칼날 처치 ${totals.bladeKills} · 공중 추가타 ${totals.airHits}`;
+    journeyClearEl.classList.remove('hidden');
+  } else {
+    phase = 'zoneClear';
+    $('zone-clear-title').textContent = `구역 ${zoneIndex + 1} 돌파 — ${z.name}`;
+    $('zone-clear-stats').textContent = `${Math.round(world.time)}초 · 측량 절단 ${s.cuts}회 · 지형 처치 ${s.kills.fall + s.kills.abyss} · 공중 추가타 ${s.airHits}`;
+    $('zone-clear-next').textContent = `다음: 구역 ${zoneIndex + 2} — ${ZONES[zoneIndex + 1].name}`;
+    zoneClearEl.classList.remove('hidden');
+  }
+}
+
+function restart(newSeed?: number): void {
+  if (newSeed !== undefined) seed = newSeed;
+  if (mode === 'journey') {
+    // 여정 중 R = 이 구역 다시. 최종 클리어 뒤 R = 여정 처음부터
+    if (phase === 'complete') {
+      results = [];
+      enterZone(0);
+    } else enterZone(zoneIndex);
+    return;
+  }
+  world = makeWorld();
+  resetTransient();
+}
+
 function setPaused(v: boolean): void {
-  if (!started || world.mode !== 'play') v = false;
+  if (!started || world.mode !== 'play' || phase !== 'play') v = false;
   paused = v;
   pauseEl.classList.toggle('hidden', !paused);
 }
@@ -81,8 +168,9 @@ controls.onKey = (code) => {
     if (code === 'Enter') start();
     return;
   }
-  if (code === 'KeyR') restart();
-  else if (code === 'KeyN' && !scenario) restart(seed + 1);
+  if (code === 'Enter') nextZone();
+  else if (code === 'KeyR') restart();
+  else if (code === 'KeyN' && mode === 'waves') restart(seed + 1);
   else if (code === 'KeyP' || code === 'Escape') setPaused(!paused);
   else if (code === 'KeyH') help.classList.toggle('hidden');
   else if (code === 'KeyT') tunePanel.classList.toggle('hidden');
@@ -175,7 +263,19 @@ function pushFeed(text: string): void {
 function updateHud(dt: number): void {
   const p = world.player;
   $('hud-hp').innerHTML = Array.from({ length: PLAYER.hp }, (_, i) => `<span class="${i < p.hp ? '' : 'lost'}">◆</span>`).join('');
-  $('hud-wave').textContent = world.setup.waves ? `WAVE ${world.stats.wave}` : `실험: ${world.setup.name}`;
+  if (mode === 'journey') {
+    const z = ZONES[zoneIndex];
+    $('hud-wave').textContent = `구역 ${zoneIndex + 1}/${ZONES.length} · ${z.name}`;
+    $('hud-goal').textContent = `목표: ${zoneStatus(z, world).label}`;
+  } else {
+    $('hud-wave').textContent = world.setup.waves ? `WAVE ${world.stats.wave}` : `실험: ${world.setup.name}`;
+    $('hud-goal').textContent = '';
+  }
+  if (bannerT > 0) {
+    bannerT -= dt;
+    if (bannerT < 0.6) banner.classList.add('fade');
+    if (bannerT <= 0) banner.classList.add('hidden');
+  }
   const k = world.stats.kills;
   $('k-terrain').textContent = String(k.fall + k.abyss);
   $('k-air').textContent = String(k.air);
@@ -251,6 +351,7 @@ function showOver(): void {
   $('over-stats').innerHTML =
     `${world.setup.waves ? `WAVE ${s.wave} · ` : ''}지형 처치 ${terrain} (낙하 ${s.kills.fall} · 절대 심연 ${s.kills.abyss}) · 공중 처치 ${s.kills.air} · 칼날 처치 ${s.kills.blade}<br>` +
     `측량 절단 ${s.cuts}회 · 침하시킨 칸 ${s.cellsCollapsed} · 지형 환원 에어본 ${s.launches} · 공중 추가타 ${s.airHits} · 충격파 ${s.shocks} · 막아 낸 탄 ${s.boltsBlocked}`;
+  $('over-note').textContent = mode === 'journey' ? 'R 이 구역 다시 시도' : mode === 'waves' ? 'R 다시 시작 · N 새 지도' : 'R 다시 시작';
   over.classList.remove('hidden');
 }
 
@@ -258,7 +359,7 @@ function showOver(): void {
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  if (started && !paused && world.mode === 'play') {
+  if (started && !paused && world.mode === 'play' && phase === 'play') {
     controls.fill(input, world.player, world.enemies, world.terrain);
     acc += dt;
     let n = 0;
@@ -266,6 +367,14 @@ function frame(now: number): void {
       world.step(FIXED_DT, input);
       acc -= FIXED_DT;
       n++;
+      if (mode === 'journey' && !world.isOver()) {
+        const z = ZONES[zoneIndex];
+        zoneTick(z, world);
+        if (zoneStatus(z, world).done) {
+          onZoneClear();
+          break;
+        }
+      }
     }
     if (n === 6) acc = 0;
     if (world.isOver()) showOver();
@@ -288,7 +397,12 @@ requestAnimationFrame(frame);
 declare global {
   interface Window {
     __cc: {
-      snapshot: () => ReturnType<World['snapshot']> & { started: boolean; paused: boolean; tune: Tune };
+      snapshot: () => ReturnType<World['snapshot']> & {
+        started: boolean;
+        paused: boolean;
+        tune: Tune;
+        journey: { mode: PlayMode; zone: number; zoneId: string; phase: Phase; label: string; done: boolean };
+      };
       /** 카메라 상태(줌·흔들림) 관찰 */
       camera: () => { zoom: number; shakeX: number; shakeY: number };
       /** 조준이 잡힌 적 id(없으면 null) */
@@ -301,7 +415,17 @@ declare global {
   }
 }
 window.__cc = {
-  snapshot: () => ({ ...world.snapshot(), started, paused, tune: { ...tune } }),
+  snapshot: () => {
+    const z = ZONES[zoneIndex];
+    const st = zoneStatus(z, world);
+    return {
+      ...world.snapshot(),
+      started,
+      paused,
+      tune: { ...tune },
+      journey: { mode, zone: zoneIndex + 1, zoneId: z.id, phase, label: st.label, done: st.done },
+    };
+  },
   camera: () => ({ zoom: renderer.cam.zoom, shakeX: renderer.cam.shakeX, shakeY: renderer.cam.shakeY }),
   aimTarget: () => controls.target?.id ?? null,
   project: (x, y, z) => {

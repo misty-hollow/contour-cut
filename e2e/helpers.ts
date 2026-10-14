@@ -4,16 +4,16 @@ import { expect, type Page } from '@playwright/test';
 
 export const cellC = (n: number) => (n + 0.5) * 6;
 
-/** 페이지를 열고 실제 클릭으로 시작한다. 콘솔·페이지 오류를 모아 반환한다. */
-export async function openGame(page: Page, scenario?: string): Promise<string[]> {
+/** 페이지를 열고 실제 클릭으로 시작한다(기본 = 첫 여정, waves = 무한 웨이브 버튼). 콘솔·페이지 오류를 모아 반환한다. */
+export async function openGame(page: Page, scenario?: string, opts: { waves?: boolean; zone?: number } = {}): Promise<string[]> {
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(scenario ? `/?scenario=${scenario}` : '/');
+  await page.goto(scenario ? `/?scenario=${scenario}` : opts.zone ? `/?zone=${opts.zone}` : '/');
   await expect(page.getByTestId('title')).toBeVisible();
-  await page.getByTestId('start').click();
+  await page.getByTestId(opts.waves ? 'start-waves' : 'start').click();
   await expect(page.getByTestId('title')).toBeHidden();
   await expect.poll(() => snap(page).then((s) => s.time), { message: '시뮬레이션이 진행된다' }).toBeGreaterThan(0.1);
   return errors;
@@ -86,4 +86,42 @@ export async function hudGeometry(page: Page): Promise<string[]> {
     }
     return problems;
   });
+}
+
+/**
+ * 실제 키 입력으로 목표 지점(평면 px)까지 걷는다. 상태는 관찰만 하고, 축마다 가까워지면 그 키를 뗀다.
+ * 막혀서 시간 안에 못 가면 실패(길이 막힌 진행 불가 상태를 잡는다).
+ */
+export async function walkTo(page: Page, x: number, y: number, timeout = 9000): Promise<void> {
+  let held: string[] = [];
+  const hold = async (keys: string[]) => {
+    for (const k of held) if (!keys.includes(k)) await page.keyboard.up(k);
+    for (const k of keys) if (!held.includes(k)) await page.keyboard.down(k);
+    held = keys;
+  };
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    const p = (await snap(page)).player;
+    const dx = x - p.x;
+    const dy = y - p.y;
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) {
+      await hold([]);
+      return;
+    }
+    const keys: string[] = [];
+    if (dx > 3) keys.push('KeyD');
+    else if (dx < -3) keys.push('KeyA');
+    if (dy > 3) keys.push('KeyS');
+    else if (dy < -3) keys.push('KeyW');
+    await hold(keys);
+    await page.waitForTimeout(25);
+  }
+  await hold([]);
+  const p = (await snap(page)).player;
+  throw new Error(`walkTo(${x.toFixed(0)},${y.toFixed(0)}) 시간 초과 — 현재 ${p.x.toFixed(0)},${p.y.toFixed(0)}`);
+}
+
+/** 칸 좌표 경유점들을 차례로 걷는다 */
+export async function walkPath(page: Page, cells: [number, number][]): Promise<void> {
+  for (const [cx, cy] of cells) await walkTo(page, cellC(cx), cellC(cy));
 }

@@ -3,8 +3,8 @@ import { aim, canvasStats, cellC, cutAt, heightAt, hudGeometry, openGame, shot, 
 
 // 실행 검증 ①: 대표 플레이 경로. 모든 행동은 실제 키보드·마우스 입력이다.
 
-test('기본 전장: 타이틀 → 클릭 시작 → WASD 이동 → 웨이브 → 화면·HUD 정상', async ({ page }) => {
-  const errors = await openGame(page);
+test('무한 웨이브: 타이틀 → "무한 웨이브" 클릭 → WASD 이동 → 웨이브 → 화면·HUD 정상', async ({ page }) => {
+  const errors = await openGame(page, undefined, { waves: true });
   const s0 = await snap(page);
   await page.keyboard.down('KeyD');
   await page.waitForTimeout(500);
