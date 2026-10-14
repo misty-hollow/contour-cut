@@ -250,7 +250,7 @@ async function zone3Bot(page: Page, timeoutMs: number, review: boolean): Promise
         console.log(run.last);
       }
       if (beat === 1) run.pitAirHits = s.stats.airHits;
-      // 직접 검토 ②용: 환원대 단계 6초 뒤(적이 가운데로 모여드는 때), 대환원 시작 2초 뒤
+      // 직접 검토용 스크린샷: 환원대 단계 6초 뒤(적이 가운데로 모여드는 때), 대환원 시작 2초 뒤
       if (beat === 2 && beat2At < 0) beat2At = s.time;
       if (beat === 2 && s.time - beat2At > 6) await shotOnce('20-zone3-table');
       if (beat === 3 && beat3At < 0) beat3At = s.time;

@@ -471,7 +471,7 @@ function frame(now: number): void {
 }
 requestAnimationFrame(frame);
 
-// ── 관찰용 디버그 핸들(읽기 전용, CLAUDE.md B절) ─────────────
+// ── 관찰용 디버그 핸들(읽기 전용, CLAUDE.md "프로젝트 고유 제약") ─────────────
 declare global {
   interface Window {
     __cc: {

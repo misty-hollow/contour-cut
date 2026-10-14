@@ -85,4 +85,4 @@ npm run dev
 
 - 스택: TypeScript + Vite + Canvas 2D(게임 엔진 없음). 그림·소리는 모두 코드로 생성(외부 에셋 없음).
 - 검증: `npm run lint`, `npm run build`, `npm test`(Vitest), `npm run e2e`(Playwright가 실제 키보드·마우스로 플레이).
-- 개발 운영 규칙: [CLAUDE.md](CLAUDE.md) · 결정 기록: [docs/DECISIONS.md](docs/DECISIONS.md) · 현재 상태: [docs/REPORT.md](docs/REPORT.md)
+- 작업 지침: [CLAUDE.md](CLAUDE.md) · 결정 기록: [docs/DECISIONS.md](docs/DECISIONS.md) · 현재 상태: [docs/WORKLOG.md](docs/WORKLOG.md)

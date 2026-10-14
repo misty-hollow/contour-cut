@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// 실행 검증 ①: 프로덕션 빌드를 vite preview로 띄우고 실제 키보드·마우스로 조작한다.
-// 테스트마다 새 브라우저 컨텍스트(CLAUDE.md H절). 로컬에서 받아 둔 chromium이 없으면 E2E_CHANNEL=msedge.
+// 실행 검증: 프로덕션 빌드를 vite preview로 띄우고 실제 키보드·마우스로 조작한다.
+// 테스트마다 새 브라우저 컨텍스트. 로컬에서 받아 둔 chromium이 없으면 E2E_CHANNEL=msedge.
 const channel = process.env.E2E_CHANNEL;
 
 export default defineConfig({
