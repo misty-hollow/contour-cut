@@ -13,8 +13,16 @@ import {
   ZONE1_P1,
   ZONE1_P2,
   ZONE1_RING,
+  ZONE2_BRIDGE,
+  ZONE2_CHASM,
   ZONE2_EXIT,
+  ZONE2_LEDGE,
+  ZONE2_PILLARS,
+  ZONE2_RIDGES,
+  ZONE2_SCARP,
+  ZONE3_BEATS,
   ZONE3_HILLS,
+  ZONE3_TABLES,
   ZONES,
   zoneResult,
   zoneStatus,
@@ -240,6 +248,27 @@ describe('구역 1 — 균열 지대(세 번의 측량)', () => {
 });
 
 describe('구역 2 — 접힘 협곡', () => {
+  /** 구역 2에서 적을 모두 치우고(또는 고른 것만 남기고) 플레이어를 칸 (cx, cy)에 세운다(테스트 준비) */
+  function canyon(cx: number, cy: number, keep: (e: { kind: string; x: number; y: number }) => boolean = () => false): World {
+    const w = zoneWorld(1);
+    w.enemies = w.enemies.filter(keep);
+    w.player.x = c(cx);
+    w.player.y = c(cy);
+    w.player.z = w.terrain.heightAt(w.player.x, w.player.y);
+    return w;
+  }
+  /** 동쪽으로 대시해 착지할 때까지 */
+  function dashEast(w: World): void {
+    const inp = emptyInput();
+    inp.moveX = 1;
+    inp.dash = true;
+    for (let k = 0; k < 120; k++) {
+      step(w, 1, inp);
+      if (k > 3 && !w.player.airborne && w.player.dashT === 0) break;
+    }
+    run(w, 1, 1);
+  }
+
   it('출발점에서 출구까지 걷거나 뛰어내려 갈 수 있고, 닿을 수 있는 어느 칸에서도 출구로 갈 수 있다(막다른 구덩이 없음)', () => {
     const s = ZONES[1].build();
     const t = new Terrain(GRID_W, GRID_H, s.heights);
@@ -252,15 +281,103 @@ describe('구역 2 — 접힘 협곡', () => {
     }
   });
 
-  it('동쪽으로 걸으며 대시하면 출구 표지에 닿아 클리어된다(적을 다 잡지 않아도)', () => {
-    const w = zoneWorld(1);
+  it('구간 표시: 플레이어가 동쪽으로 갈수록 단애 → 사격 회랑 → 심연 균열, 구간마다 힌트가 다르다', () => {
+    const labels = [6, 30, 52, 70].map((cx) => zoneStatus(ZONES[1], canyon(cx, 20)));
+    expect(labels.map((l) => l.label)).toEqual([
+      '출구까지 돌파 · 구간 1/3 단애',
+      '출구까지 돌파 · 구간 2/3 사격 회랑',
+      '출구까지 돌파 · 구간 3/3 심연 균열',
+      '출구까지 돌파 · 구간 3/3 심연 균열',
+    ]);
+    expect(new Set(labels.slice(0, 3).map((l) => l.hint)).size).toBe(3);
+    expect(labels.every((l) => !l.done)).toBe(true);
+  });
+
+  it('단애: 걸어 내려가면 4단 낙하 충격파, 대시하면 협곡 바닥을 넘어 회랑까지 활강한다', () => {
+    const walk = canyon(ZONE2_SCARP.x1, 20);
     const inp = emptyInput();
     inp.moveX = 1;
-    let k = 0;
-    for (; k < 20 * 60 && !zoneStatus(ZONES[1], w).done && w.mode === 'play'; k++) {
-      inp.dash = k % 40 === 0;
-      step(w, 1, inp);
-    }
+    run(walk, 1, 0.4, inp);
+    expect(walk.stats.shocks).toBe(1);
+    expect(walk.player.z).toBe(0);
+    const glide = canyon(ZONE2_SCARP.x1 - 1, 20);
+    dashEast(glide);
+    expect(glide.player.x / CELL).toBeGreaterThan(27);
+    expect(glide.stats.shocks).toBe(1);
+    expect(glide.player.hp).toBe(5);
+  });
+
+  it('심연 균열: 평지에서 대시하면 못 건너고 빠지지만(체력 −1), 도약대에서 대시하면 건너편 광장에 착지 충격파', () => {
+    const flat = canyon(ZONE2_CHASM.x0 - 1, 30);
+    run(flat, 1, 0.1); // 균열 앞 평지(표고 1)에 선다(안전 지점 기록)
+    dashEast(flat);
+    expect(flat.player.hp).toBe(4);
+    expect(flat.player.x / CELL).toBeLessThan(ZONE2_CHASM.x0);
+    const high = canyon(ZONE2_LEDGE.x1 - 1, 20);
+    expect(high.player.z).toBe(4);
+    dashEast(high);
+    expect(high.player.x / CELL).toBeGreaterThan(ZONE2_CHASM.x1 + 1);
+    expect(high.player.z).toBe(1);
+    expect(high.player.hp).toBe(5);
+    expect(high.stats.shocks).toBe(1);
+  });
+
+  it('남쪽 다리는 한 방향 길: 걸어서 건너면 광장으로 2단 내려서며 충격파, 광장의 적은 다리로 올라오지 못한다', () => {
+    const w = canyon(ZONE2_CHASM.x0 - 4, ZONE2_BRIDGE.y0);
+    const inp = emptyInput();
+    inp.moveX = 1;
+    run(w, 1, 3, inp);
+    expect(w.player.x / CELL).toBeGreaterThan(ZONE2_CHASM.x1 + 1);
+    expect(w.player.z).toBe(1);
+    expect(w.stats.shocks).toBe(1);
+    // 광장에서 다리·회랑으로 가는 적의 길은 없다(적은 고도차 1까지만 걷는다)
+    const flow = buildFlowField(w.terrain, ZONE2_CHASM.x0 - 4, ZONE2_BRIDGE.y0);
+    for (const e of ZONES[1].build().enemies.filter((en) => en.cx > ZONE2_CHASM.x1)) expect(flow[w.terrain.idx(e.cx, e.cy)], `광장 적 ${e.cx},${e.cy}`).toBe(-1);
+  });
+
+  it('사격 회랑: 기둥 뒤에서는 능선 사격형의 탄이 막히고, 가리는 것 없이 서 있으면 맞는다', () => {
+    const north = (e: { kind: string; y: number }) => e.kind === 'shooter' && e.y < c(ZONE2_RIDGES.north[1] + 1);
+    const pillar = ZONE2_PILLARS[0];
+    const covered = canyon(pillar.x1, pillar.y1 + 2, north);
+    run(covered, 1, 6);
+    expect(covered.player.hp).toBe(5);
+    expect(covered.stats.boltsBlocked).toBeGreaterThan(0);
+    const open = canyon(pillar.x1 + 4, pillar.y1 + 2, north);
+    run(open, 1, 6);
+    expect(open.player.hp).toBeLessThan(5);
+  });
+
+  it('사격 회랑: 회랑에서 능선 가장자리를 베면 사격형이 3단 떨어져 쓰러진다', () => {
+    const shooter = ZONES[1].build().enemies.find((e) => e.kind === 'shooter' && e.cy <= ZONE2_RIDGES.north[1])!;
+    const w = canyon(shooter.cx, shooter.cy + 4, (e) => e.kind === 'shooter' && e.x === c(shooter.cx) && e.y === c(shooter.cy));
+    cutToward(w, 1, c(shooter.cx), c(shooter.cy));
+    run(w, 1, 1.5);
+    expect(w.stats.kills.fall).toBe(1);
+  });
+
+  it('도약대 경로: 단애에서 활강 → 회랑 → 계단으로 도약대 → 균열 위 활강 → 출구 표지(적을 다 잡지 않아도 클리어)', () => {
+    const w = zoneWorld(1);
+    const p = w.player;
+    const go = (cx: number, cy: number) => {
+      const inp = emptyInput();
+      for (let k = 0; k < 15 * 60; k++) {
+        const dx = c(cx) - p.x;
+        const dy = c(cy) - p.y;
+        if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+        inp.moveX = Math.abs(dx) > 2 ? Math.sign(dx) : 0;
+        inp.moveY = Math.abs(dy) > 2 ? Math.sign(dy) : 0;
+        step(w, 1, inp);
+      }
+      throw new Error(`${cx},${cy}까지 가지 못함(현재 ${(p.x / CELL).toFixed(1)},${(p.y / CELL).toFixed(1)})`);
+    };
+    go(ZONE2_SCARP.x1 - 1, 20);
+    dashEast(w);
+    go(ZONE2_LEDGE.x0 - 5, 20);
+    go(ZONE2_LEDGE.x1 - 1, 20);
+    expect(p.z).toBe(4);
+    dashEast(w);
+    go(ZONE2_EXIT.cx, ZONE2_EXIT.cy);
+    run(w, 1, 0.1);
     expect(w.mode).toBe('play');
     expect(inExit(w)).toBe(true);
     expect(zoneStatus(ZONES[1], w).done).toBe(true);
@@ -269,43 +386,111 @@ describe('구역 2 — 접힘 협곡', () => {
 });
 
 describe('구역 3 — 환원 구역', () => {
-  it('언덕마다 가두기 → 7초 환원 → 공중 추가타를 세 번 이으면 클리어된다', () => {
-    const w = zoneWorld(2);
-    const p = w.player;
-    for (const hl of ZONE3_HILLS) {
-      const sentry = w.enemies.find((e) => e.state !== 'dead' && Math.hypot(e.x - c(hl.cx), e.y - c(hl.cy)) < 2 * CELL);
-      expect(sentry, `언덕 ${hl.cx},${hl.cy}의 감시자`).toBeDefined();
-      p.x = c(hl.cx + 10);
-      p.y = c(hl.cy);
-      cutToward(w, 2, c(hl.cx), c(hl.cy));
-      // 심연 가장자리까지 다가간다
-      const walk = emptyInput();
-      walk.moveX = -1;
-      run(w, 2, 1.2, walk);
-      let n = 0;
-      while (sentry!.state !== 'launched' && n++ < (tune.restoreSec + 2) * 60) step(w, 2);
-      expect(sentry!.state).toBe('launched');
-      const before = w.stats.airHits;
-      cutToward(w, 2, sentry!.x, sentry!.y);
-      expect(w.stats.airHits).toBe(before + 1);
-      run(w, 2, 0.5);
-    }
-    expect(zoneStatus(ZONES[2], w)).toMatchObject({ done: true, label: '공중 추가타 3/3' });
+  const restore = ZONES[2];
+
+  it('세 단계(가두기 → 환원대 → 대환원), 적은 3 → 5 → 6으로 늘고 마지막에 사격형 둘', () => {
+    expect(restore.kind).toBe('beats');
+    expect(ZONE3_BEATS.map((b) => b.name)).toEqual(['가두기', '환원대', '대환원']);
+    expect(ZONE3_BEATS.map((b) => b.enemies.length)).toEqual([3, 5, 6]);
+    expect(ZONE3_BEATS[2].enemies.filter((e) => e.kind === 'shooter').length).toBe(2);
+    expect(zoneStatus(restore, zoneWorld(2)).label).toBe('환원 1/3 가두기 · 적 0/3');
   });
 
-  it('살아 있는 적이 없고 목표가 남았으면 언덕 꼭대기에 감시자가 새로 선다(진행 불가 방지). 목표를 채우면 더 서지 않는다', () => {
+  it('평평한 바닥(표고 1)에는 등고선이 없어 베어도 무너지지 않는다 — 지형으로 다루려면 언덕과 환원대를 쓴다', () => {
     const w = zoneWorld(2);
+    cutToward(w, 2, w.player.x + 40, w.player.y);
+    run(w, 2, 0.5);
+    cutToward(w, 2, w.player.x, w.player.y + 40);
+    expect(w.stats.cuts).toBe(2);
+    expect(w.stats.cellsCollapsed).toBe(0);
+  });
+
+  it('가두기: 언덕 바깥 등고선을 베면 감시자 둘이 구덩이에 갇히고, 7초 뒤 환원으로 튕겨 오른 것을 구덩이 가장자리에서 공중 추가타', () => {
+    const w = zoneWorld(2);
+    w.enemies = w.enemies.filter((e) => e.dormant > 0);
+    const p = w.player;
+    const hill = ZONE3_HILLS[0];
+    p.x = c(hill.cx);
+    p.y = c(hill.cy + 9);
+    cutToward(w, 2, c(hill.cx), c(hill.cy));
+    const walk = emptyInput();
+    walk.moveY = -1;
+    run(w, 2, 1.5, walk); // 심연 가장자리에서 걸음이 멈춘다
+    expect(p.hp).toBe(5);
+    const [a, b] = w.enemies;
+    expect([a.hp, b.hp]).toEqual([1, 1]);
+    let n = 0;
+    while (a.state !== 'launched' && n++ < (tune.restoreSec + 1) * 60) {
+      step(w, 2);
+      // 갇힌 동안 구덩이(꼭대기 반경 4칸) 밖으로 나오지 못한다
+      for (const e of w.enemies) expect(Math.hypot(e.x - c(hill.cx), e.y - c(hill.cy))).toBeLessThan(4 * CELL);
+    }
+    expect(a.state).toBe('launched');
+    expect(b.state).toBe('launched');
+    cutToward(w, 2, a.x, a.y);
+    expect(w.stats.airHits).toBeGreaterThanOrEqual(1);
+    run(w, 2, 0.4);
+    if (b.state !== 'dead') cutToward(w, 2, b.x, b.y);
+    run(w, 2, 1);
+    expect(w.stats.kills.air).toBe(2);
+  });
+
+  it('환원대: 베면 바닥과 같은 높이가 되어 적이 올라서고, 7초 뒤 솟는 땅이 그 위의 적을 띄운다', () => {
+    const tbl = ZONE3_TABLES[0];
+    const w = zoneWorld(2);
+    w.enemies = [];
+    const p = w.player;
+    const mid = { cx: Math.floor((tbl.x0 + tbl.x1) / 2), cy: Math.floor((tbl.y0 + tbl.y1) / 2) };
+    p.x = c(mid.cx);
+    p.y = c(tbl.y1 + 3);
+    cutToward(w, 2, c(mid.cx), c(mid.cy));
+    for (let y = tbl.y0; y <= tbl.y1; y++) for (let x = tbl.x0; x <= tbl.x1; x++) expect(w.terrain.get(x, y), `${x},${y}`).toBe(1);
+    // 환원대 한가운데로 올라선다. 북쪽에서 돌진형이 다가온다
+    p.x = c(mid.cx);
+    p.y = c(mid.cy);
+    const e = w.spawnEnemy('chaser', c(mid.cx), c(tbl.y0 - 6), 0, false);
+    let k = 0;
+    while (e.state !== 'launched' && k++ < (tune.restoreSec + 1) * 60) step(w, 2);
+    expect(e.state).toBe('launched');
+    expect(p.z).toBe(4); // 플레이어는 땅과 함께 올라선다(튕기지 않음)
+    cutToward(w, 2, e.x, e.y);
+    expect(w.stats.airHits).toBe(1);
+  });
+
+  it('다음 단계의 적이 설 언덕이 무너져 있으면 환원될 때까지 기다렸다가 나타난다', () => {
+    const w = zoneWorld(2);
+    const st = newZoneState();
+    const p = w.player;
     for (const e of w.enemies) e.state = 'dead';
-    w.enemies = [];
-    zoneTick(ZONES[2], w);
-    expect(w.enemies.length).toBe(1);
-    const e = w.enemies[0];
-    expect(ZONE3_HILLS.some((hl) => Math.hypot(e.x - c(hl.cx), e.y - c(hl.cy)) < 1)).toBe(true);
-    expect(e.state).toBe('spawn');
-    w.enemies = [];
-    w.stats.airHits = 3;
-    zoneTick(ZONES[2], w);
-    expect(w.enemies.length).toBe(0);
+    run(w, 2, BEAT_GAP + 0.2, emptyInput(), st);
+    expect(st.beat).toBe(1);
+    // 대환원 사격형 자리(서쪽 언덕)를 베어 둔 채로 환원대 단계를 끝낸다
+    const hill = ZONE3_HILLS[1];
+    p.x = c(hill.cx + 9);
+    p.y = c(hill.cy);
+    cutToward(w, 2, c(hill.cx), c(hill.cy), st);
+    p.x = c(40);
+    p.y = c(34);
+    for (const e of w.enemies) e.state = 'dead';
+    run(w, 2, BEAT_GAP + 0.5, emptyInput(), st);
+    expect(st.pending).toBe(true);
+    expect(zoneStatus(restore, w, st).label).toBe('환원 3/3 대환원 · 준비');
+    run(w, 2, tune.restoreSec, emptyInput(), st);
+    expect(st.beat).toBe(2);
+    expect(w.enemies.filter((e) => e.kind === 'shooter' && e.state !== 'dead').length).toBe(2);
+  });
+
+  it('콤보는 강제가 아니다: 공중 추가타 없이도 세 단계의 적을 모두 쓰러뜨리면 클리어', () => {
+    const w = zoneWorld(2);
+    const st = newZoneState();
+    for (let beat = 0; beat < 3; beat++) {
+      expect(st.beat).toBe(beat);
+      expect(zoneStatus(restore, w, st).done).toBe(false);
+      for (const e of w.enemies) e.state = 'dead';
+      run(w, 2, BEAT_GAP + 0.2, emptyInput(), st);
+    }
+    expect(w.stats.airHits).toBe(0);
+    expect(zoneStatus(restore, w, st)).toMatchObject({ done: true, label: '환원 3/3 대환원 · 적 6/6' });
   });
 });
 
