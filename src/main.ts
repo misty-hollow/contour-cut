@@ -277,9 +277,8 @@ function updateHud(dt: number): void {
     $('hud-wave').textContent = `구역 ${zoneIndex + 1}/${ZONES.length} · ${z.name}`;
     const st = zoneStatus(z, world, zstate);
     $('hud-goal').textContent = `목표: ${st.label}`;
-    // 다음 단계가 자리를 요구하면 그 자리에 안내 표지
-    const next = zstate.pending && z.beats ? z.beats[zstate.beat + 1] : undefined;
-    world.marker = next?.trigger ?? null;
+    // 다음 단계가 자리를 요구하거나(트리거) 출현 지점에서 물러나야 하면 갈 곳에 안내 표지
+    world.marker = st.marker ?? null;
     hintEl.textContent = st.hint;
     hintEl.classList.toggle('hidden', !st.hint || phase !== 'play');
   } else {

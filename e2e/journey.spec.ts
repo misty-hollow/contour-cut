@@ -193,6 +193,8 @@ const Z3 = {
 
 interface Zone3Run {
   result: 'clear' | 'over' | 'timeout';
+  /** 마지막으로 본 상태 한 줄(정체 진단용 — 실패 메시지에 싣는다) */
+  last: string;
   /** 단계가 바뀔 때마다 본 HUD 기하 문제 */
   hud: string[];
   /** 환원대를 벤 뒤 그 환원으로 띄운 적 수 */
@@ -214,7 +216,7 @@ async function zone3Bot(page: Page, timeoutMs: number, review: boolean): Promise
   let tableCut = -1;
   let launchesAtTableCut = 0;
   let lastTrace = -1;
-  const run: Zone3Run = { result: 'timeout', hud: [], tableLaunches: 0, pitAirHits: 0 };
+  const run: Zone3Run = { result: 'timeout', last: '', hud: [], tableLaunches: 0, pitAirHits: 0 };
   let seenBeat = '';
   let beat2At = -1;
   let beat3At = -1;
@@ -226,6 +228,10 @@ async function zone3Bot(page: Page, timeoutMs: number, review: boolean): Promise
   };
   const cutOk = (t: number) => t - lastCut > 0.42;
   let lastDash = -1;
+  // 막힘 감지: 갈 곳이 있는데 0.8초(게임 시간) 동안 거의 못 움직였으면 0.7초 동안 옆으로 비켜 돌아간다(환원대·언덕을 돌아가기)
+  let anchor = { x: 0, y: 0, t: -1 };
+  let detourUntil = -1;
+  let detourKey = 'KeyA';
   const near = (p: { x: number; y: number }, cx: number, cy: number) => Math.abs(p.x - cellC(cx)) < 5 && Math.abs(p.y - cellC(cy)) < 5;
   const t0 = Date.now();
   try {
@@ -238,9 +244,10 @@ async function zone3Bot(page: Page, timeoutMs: number, review: boolean): Promise
       const dist = (e: { x: number; y: number }) => Math.hypot(e.x - p.x, e.y - p.y);
       const byDist = (a: { x: number; y: number }, b: { x: number; y: number }) => dist(a) - dist(b);
       const beat = s.journey.beat;
+      run.last = `${s.time.toFixed(1)} b${beat}${s.journey.pending ? 'p' : ''} P(${(p.x / 6).toFixed(1)},${(p.y / 6).toFixed(1)},z${p.z.toFixed(1)}) hp${p.hp} L${s.stats.launches} A${s.stats.airHits} hint「${s.journey.hint}」 | ${s.enemies.filter((e) => e.state !== 'dead').map((e) => `${e.kind[0]}${(e.x / 6).toFixed(0)},${(e.y / 6).toFixed(0)}z${e.z.toFixed(0)}h${e.hp}${e.state.slice(0, 3)}${e.exposed ? '!' : ''}`).join(' ')}`;
       if (process.env.BOT_TRACE && s.time - lastTrace > 0.5) {
         lastTrace = s.time;
-        console.log(`${s.time.toFixed(1)} b${beat}${s.journey.pending ? 'p' : ''} P(${(p.x / 6).toFixed(1)},${(p.y / 6).toFixed(1)},z${p.z.toFixed(1)}) hp${p.hp} L${s.stats.launches} A${s.stats.airHits} | ${live.map((e) => `${e.kind[0]}${(e.x / 6).toFixed(0)},${(e.y / 6).toFixed(0)}z${e.z.toFixed(0)}h${e.hp}${e.state.slice(0, 3)}${e.exposed ? '!' : ''}`).join(' ')}`);
+        console.log(run.last);
       }
       if (beat === 1) run.pitAirHits = s.stats.airHits;
       // 직접 검토 ②용: 환원대 단계 6초 뒤(적이 가운데로 모여드는 때), 대환원 시작 2초 뒤
@@ -336,7 +343,15 @@ async function zone3Bot(page: Page, timeoutMs: number, review: boolean): Promise
         const target = live.slice().sort(byDist)[0];
         if (target) goal = [target.x / 6 - 0.5, target.y / 6 - 0.5];
       }
-      await keys.toward(p, cellC(goal[0]), cellC(goal[1]));
+      const far = Math.hypot(cellC(goal[0]) - p.x, cellC(goal[1]) - p.y) > 10;
+      if (!far || Math.hypot(p.x - anchor.x, p.y - anchor.y) > 3) anchor = { x: p.x, y: p.y, t: s.time };
+      else if (s.time - anchor.t > 0.8 && s.time > detourUntil) {
+        detourUntil = s.time + 0.7;
+        detourKey = detourKey === 'KeyA' ? 'KeyD' : 'KeyA';
+        anchor = { x: p.x, y: p.y, t: s.time + 0.7 };
+      }
+      if (s.time < detourUntil) await keys.hold([detourKey]);
+      else await keys.toward(p, cellC(goal[0]), cellC(goal[1]));
       await page.waitForTimeout(30);
     }
     return run;
@@ -349,7 +364,7 @@ async function clearZone3(page: Page, review = false): Promise<Zone3Run & { atte
   for (let attempt = 1; attempt <= 3; attempt++) {
     const r = await zone3Bot(page, 150_000, review);
     if (r.result === 'clear') return { ...r, attempts: attempt };
-    expect(r.result, '구역 3 실패는 게임 오버뿐이어야 한다').toBe('over');
+    expect(r.result, `구역 3 실패는 게임 오버뿐이어야 한다 — 마지막 상태 ${r.last}`).toBe('over');
     await page.keyboard.press('KeyR');
     await expect.poll(async () => (await snap(page)).mode).toBe('play');
   }
@@ -434,6 +449,31 @@ test('첫 여정 완주: 타이틀 → 구역 1 균열 지대 → 구역 2 접�
   expect((await snap(page)).player.hp).toBe(5);
   test.info().annotations.push({ type: '구역 1·2·3 시도 횟수', description: `${z1attempts}·${attempts}·${z3.attempts}` });
   test.info().annotations.push({ type: '구역 3 콤보', description: `가두기 공중 추가타 ${z3.pitAirHits} · 환원대 에어본 ${z3.tableLaunches}` });
+  expect(errors).toEqual([]);
+});
+
+test('리뷰 재현: 다음 단계 출현 지점 바로 옆에서 기다리면 "물러나라" 안내 → 청록 표지(출발점)로 가면 다음 단계 시작(구역 1 측량 2)', async ({ page }) => {
+  const errors = await openGame(page);
+  // 측량 1을 대지 서쪽에서 정리하고, 곧장 측량 2 서쪽 대지 출현 지점 바로 아래(4칸)로 간다
+  await walkTo(page, cellC(31), cellC(25));
+  await cutAt(page, cellC(40), cellC(25));
+  await walkTo(page, cellC(22), cellC(23));
+  // 대지(표고 2) 남쪽 절벽에 막힐 때까지 W — 출현 지점(22,18)에서 4칸 안
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(500);
+  await page.keyboard.up('KeyW');
+  expect(Math.hypot((await snap(page)).player.y - cellC(18), (await snap(page)).player.x - cellC(22))).toBeLessThanOrEqual(24);
+  await expect.poll(async () => (await journey(page)).label, { timeout: 6000, message: '측량 2 준비' }).toBe('측량 2/3 포대 · 준비');
+  await expect(page.getByTestId('hint')).toContainText('물러나면 다음 단계가 시작된다', { timeout: 4000 });
+  expect(await hudGeometry(page)).toEqual([]);
+  // 서 있는 동안에는 시작하지 않는다
+  await page.waitForTimeout(1500);
+  expect((await journey(page)).beat).toBe(1);
+  await shot(page, '22-step-back');
+  // 안내대로 출발점 쪽으로 물러나면 시작
+  await walkTo(page, cellC(40), cellC(34));
+  await expect.poll(async () => (await journey(page)).beat, { timeout: 3000, message: '측량 2 시작' }).toBe(2);
+  await expect(page.getByTestId('hint')).not.toContainText('물러나');
   expect(errors).toEqual([]);
 });
 

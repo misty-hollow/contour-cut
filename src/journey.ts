@@ -55,6 +55,8 @@ export interface ZoneStatus {
   label: string;
   /** 지금 단계의 전술 힌트(없으면 빈 문자열) */
   hint: string;
+  /** 화면 안내 표지(가야 할 곳). 없으면 표시하지 않는다 */
+  marker?: { cx: number; cy: number; r: number };
 }
 
 /** 구역 하나를 도는 동안의 진행 상태(구역에 들어갈 때마다 새로) */
@@ -378,7 +380,13 @@ export function zoneStatus(zone: Zone, world: World, st: ZoneState = newZoneStat
       if (st.pending) {
         // 다음 단계 준비 중: 다음 단계 이름과 어디로 가야 하는지
         const next = beats[st.beat + 1];
-        return { done: false, label: `${word} ${st.beat + 2}/${beats.length} ${next.name} · 준비`, hint: next.prompt ?? next.hint };
+        const label = `${word} ${st.beat + 2}/${beats.length} ${next.name} · 준비`;
+        // 숨 고르기가 끝났는데 플레이어가 출현 지점 바로 옆이라서만 기다리는 중이면, 물러날 곳(출발점)을 알린다
+        if (st.wait <= 0 && beatBlock(world, next) === 'near') {
+          const sp = world.setup.player;
+          return { done: false, label, hint: '적이 나타날 자리 바로 옆이다 — 청록 표지 쪽으로 물러나면 다음 단계가 시작된다', marker: { cx: sp.cx, cy: sp.cy, r: 2 } };
+        }
+        return { done: false, label, hint: next.prompt ?? next.hint, marker: next.trigger };
       }
       return {
         done: last && alive === 0,
@@ -399,15 +407,17 @@ export function zoneStatus(zone: Zone, world: World, st: ZoneState = newZoneStat
   }
 }
 
-/** 단계의 적을 세울 수 있는가: 서는 칸이 모두 단단하고(침하·심연 아님) 플레이어 바로 옆이 아니다 */
-function beatReady(world: World, b: Beat): boolean {
+/**
+ * 단계의 적을 세울 수 없는 까닭: trigger = 플레이어가 아직 트리거 원 밖, near = 플레이어가 어느 출현 지점 4칸 안,
+ * terrain = 서는 칸이 무너져 있음(환원되면 풀린다). 세울 수 있으면 null
+ */
+function beatBlock(world: World, b: Beat): 'trigger' | 'near' | 'terrain' | null {
   const t = world.terrain;
   const p = world.player;
-  if (b.trigger && Math.hypot(p.x - cellCenter(b.trigger.cx), p.y - cellCenter(b.trigger.cy)) > b.trigger.r * CELL) return false;
-  return b.enemies.every((e) => {
-    const i = t.idx(e.cx, e.cy);
-    return !t.isCut(i) && !isAbyss(t.height[i]) && Math.hypot(p.x - cellCenter(e.cx), p.y - cellCenter(e.cy)) > 4 * CELL;
-  });
+  if (b.trigger && Math.hypot(p.x - cellCenter(b.trigger.cx), p.y - cellCenter(b.trigger.cy)) > b.trigger.r * CELL) return 'trigger';
+  if (b.enemies.some((e) => Math.hypot(p.x - cellCenter(e.cx), p.y - cellCenter(e.cy)) <= 4 * CELL)) return 'near';
+  if (b.enemies.some((e) => t.isCut(t.idx(e.cx, e.cy)) || isAbyss(t.height[t.idx(e.cx, e.cy)]))) return 'terrain';
+  return null;
 }
 
 /**
@@ -425,7 +435,7 @@ export function zoneTick(zone: Zone, world: World, st: ZoneState = newZoneState(
   if (st.pending) {
     st.wait -= FIXED_DT;
     const next = beats[st.beat + 1];
-    if (st.wait <= 0 && beatReady(world, next)) {
+    if (st.wait <= 0 && beatBlock(world, next) === null) {
       st.beat++;
       st.pending = false;
       for (const e of next.enemies) world.spawnEnemy(e.kind, cellCenter(e.cx), cellCenter(e.cy), e.dormant ?? 0, true);

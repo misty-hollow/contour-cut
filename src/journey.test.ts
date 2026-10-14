@@ -480,6 +480,50 @@ describe('구역 3 — 환원 구역', () => {
     expect(w.enemies.filter((e) => e.kind === 'shooter' && e.state !== 'dead').length).toBe(2);
   });
 
+  it('리뷰 재현: 다음 단계 출현 지점 바로 옆에서 앞 단계를 끝내면 "물러나라" 안내와 출발점 표지가 뜨고, 그리로 가면 시작된다', () => {
+    const w = zoneWorld(2);
+    const st = newZoneState();
+    const p = w.player;
+    for (const e of w.enemies) e.state = 'dead';
+    run(w, 2, BEAT_GAP + 0.2, emptyInput(), st);
+    expect(st.beat).toBe(1);
+    // 환원대 단계의 마지막 적을 대환원 돌진형 출현 지점(3,36) 옆에서 쓰러뜨린 상태
+    p.x = c(3);
+    p.y = c(35);
+    for (const e of w.enemies) e.state = 'dead';
+    run(w, 2, BEAT_GAP + 5, emptyInput(), st);
+    expect(st.pending).toBe(true);
+    const wait = zoneStatus(restore, w, st);
+    expect(wait.label).toBe('환원 3/3 대환원 · 준비');
+    expect(wait.hint).toContain('물러나');
+    expect(wait.marker).toMatchObject({ cx: w.setup.player.cx, cy: w.setup.player.cy });
+    // 표지(출발점)로 가면 바로 시작
+    p.x = c(w.setup.player.cx);
+    p.y = c(w.setup.player.cy);
+    run(w, 2, 0.1, emptyInput(), st);
+    expect(st.beat).toBe(2);
+    expect(zoneStatus(restore, w, st).marker).toBeUndefined();
+  });
+
+  it('출현 지점 대기 안내의 표지(출발점)는 단계형 구역의 어느 단계 출현 지점과도 4칸 넘게 떨어져 있다(안내대로 가면 반드시 시작)', () => {
+    for (const z of ZONES.filter((zn) => zn.kind === 'beats')) {
+      const s = z.build();
+      for (const b of z.beats!.slice(1))
+        for (const e of b.enemies) expect(Math.hypot(e.cx - s.player.cx, e.cy - s.player.cy), `${z.id} ${b.name} ${e.cx},${e.cy}`).toBeGreaterThan(4);
+    }
+  });
+
+  it('거리 조건이 아닌 대기(숨 고르기·지형 환원 대기)에는 물러나라 안내를 띄우지 않는다', () => {
+    const w = zoneWorld(2);
+    const st = newZoneState();
+    for (const e of w.enemies) e.state = 'dead';
+    run(w, 2, 0.5, emptyInput(), st);
+    expect(st.pending).toBe(true);
+    const gap = zoneStatus(restore, w, st);
+    expect(gap.hint).not.toContain('물러나');
+    expect(gap.marker).toBeUndefined();
+  });
+
   it('콤보는 강제가 아니다: 공중 추가타 없이도 세 단계의 적을 모두 쓰러뜨리면 클리어', () => {
     const w = zoneWorld(2);
     const st = newZoneState();
