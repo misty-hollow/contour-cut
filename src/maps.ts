@@ -24,7 +24,7 @@ export interface Setup {
 export const DEFAULT_SEED = 7;
 
 /** 시나리오 이름 목록. `?scenario=<이름>`. 검증 하네스와 사용자 실험 겸용 */
-export const SCENARIOS = ['lab', 'cut', 'fall', 'abyss', 'trap', 'dash', 'cover', 'exposed', 'highshot', 'combo', 'swarm'] as const;
+export const SCENARIOS = ['lab', 'cut', 'fall', 'abyss', 'trap', 'dash', 'cover', 'exposed', 'highshot', 'combo', 'swarm', 'hidden'] as const;
 
 export function cellCenter(c: number): number {
   return (c + 0.5) * CELL;
@@ -155,6 +155,18 @@ export function buildSetup(name: string | null, seed: number): Setup {
     case 'highshot':
       // 메사 위(고도 4) 사격형이 아래 평지(고도 1)의 플레이어를 쏜다
       return { name, heights: labHeights(), player: { cx: 40, cy: 15 }, enemies: [{ kind: 'shooter', cx: 46, cy: 15 }], waves: false };
+    case 'hidden':
+      // 2.5D 가림 확인: 메사(표고 4) 바로 북쪽 낮은 땅에 멈춰 선 적 둘 — 남쪽 메사에 몸이 가려 윤곽으로 보인다
+      return {
+        name,
+        heights: labHeights(),
+        player: { cx: 50, cy: 25 },
+        enemies: [
+          { kind: 'chaser', cx: 48, cy: 9, dormant: 60 },
+          { kind: 'shooter', cx: 52, cy: 9, dormant: 60 },
+        ],
+        waves: false,
+      };
     case 'swarm': {
       const enemies: EnemySpec[] = [];
       for (let k = 0; k < 8; k++) {

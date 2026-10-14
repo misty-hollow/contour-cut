@@ -50,17 +50,42 @@ let paused = false;
 let acc = 0;
 let last = performance.now();
 
-// ── 화면 크기: 정수 배율 우선 ─────────────────────────────
+// ── 화면 크기: 기기 픽셀 기준 정수 배율 ───────────────────────
+// 게임 1px = k 기기 픽셀(정수). CSS 크기는 480·k/DPR이라 Windows 배율 125%처럼 DPR이 정수가 아니어도
+// 캔버스가 브라우저에서 다시 늘거나 줄지 않아 픽셀 폭이 고르다. 위치도 기기 픽셀 경계에 맞춘다(반 픽셀 어긋나면 흐려진다).
+// HUD 단위 --s(게임 1px의 CSS px)도 k/DPR. DPR 1이면 이전(CSS 정수 배율)과 같다.
 function layout(): void {
-  const s = Math.min(window.innerWidth / VIEW_W, window.innerHeight / VIEW_H);
-  const scale = s >= 1 ? Math.floor(s) : s;
-  stage.style.width = `${VIEW_W * scale}px`;
-  stage.style.height = `${VIEW_H * scale}px`;
-  stage.style.setProperty('--s', String(scale));
-  renderer.resize(Math.ceil(scale * (window.devicePixelRatio || 1)));
+  const dpr = window.devicePixelRatio || 1;
+  const devW = window.innerWidth * dpr;
+  const devH = window.innerHeight * dpr;
+  const k = Math.floor(Math.min(devW / VIEW_W, devH / VIEW_H));
+  // 창이 480×270 기기 픽셀보다 작으면 정수 배율이 없다: 맞춰 줄이고 캔버스는 1배
+  const css = k >= 1 ? k / dpr : Math.min(window.innerWidth / VIEW_W, window.innerHeight / VIEW_H);
+  const shownK = Math.max(1, k);
+  stage.style.width = `${VIEW_W * css}px`;
+  stage.style.height = `${VIEW_H * css}px`;
+  stage.style.left = `${Math.max(0, Math.floor((devW - VIEW_W * shownK) / 2)) / dpr}px`;
+  stage.style.top = `${Math.max(0, Math.floor((devH - VIEW_H * shownK) / 2)) / dpr}px`;
+  stage.style.setProperty('--s', String(css));
+  // 캔버스 배율은 8 이하: 그보다 크면 k를 나누는 가장 큰 수로 그리고 브라우저가 정수배로 늘린다
+  let ck = shownK;
+  if (ck > 8) for (let d = 8; d >= 1; d--) if (shownK % d === 0) { ck = d; break; }
+  renderer.resize(ck);
+}
+let dprQuery: MediaQueryList | null = null;
+/** 모니터 이동·확대 비율 변경(DPR 변화)에도 다시 맞춘다 */
+function watchDpr(): void {
+  dprQuery?.removeEventListener('change', onDpr);
+  dprQuery = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`) ?? null;
+  dprQuery?.addEventListener('change', onDpr);
+}
+function onDpr(): void {
+  layout();
+  watchDpr();
 }
 window.addEventListener('resize', layout);
 layout();
+watchDpr();
 
 // ── 오버레이 ──────────────────────────────────────────
 const title = $('title');
@@ -261,29 +286,72 @@ function syncHelp(): void {
 syncHelp();
 
 // ── HUD ────────────────────────────────────────────────
-const feed: { text: string; t: number }[] = [];
+// 알림 줄의 색 = 원인(UI System 01): 지형 처치 오렌지 · 환원·공중 시안 · 플레이어 위험 레드 · 그 밖 잉크
+type FeedTone = 'ink' | 'terrain' | 'air' | 'alert';
+const feed: { text: string; t: number; tone: FeedTone }[] = [];
 const hintEl = $('hint');
 const feedEl = $('feed');
-function pushFeed(text: string): void {
-  feed.unshift({ text, t: 1.6 });
+const zoneEl = $('hud-tl');
+const waveEl = $('hud-tr');
+const hpEl = $('hud-hp');
+hpEl.innerHTML = '<span></span>'.repeat(PLAYER.hp);
+const hpSegs = Array.from(hpEl.children) as HTMLElement[];
+let pipsKey = '';
+function pushFeed(text: string, tone: FeedTone = 'ink'): void {
+  feed.unshift({ text, t: 1.6, tone });
   feed.length = Math.min(feed.length, 3);
+}
+
+/** 계기 한 줄: 준비(채움 100%·라벨 잉크·램프 점등) · 재충전(채움 비율, 옅게) · 사용 불가(정지·돌파 화면·게임 오버, 사선 해칭) */
+function gauge(name: 'cut' | 'dash', frac: number, usable: boolean): void {
+  const ready = usable && frac >= 1;
+  const track = $(`track-${name}`);
+  track.classList.toggle('off', !usable);
+  track.classList.toggle('ready', ready);
+  $(`cool-${name}`).style.width = `${100 * Math.max(0, Math.min(1, frac))}%`;
+  $(`lamp-${name}`).classList.toggle('on', ready);
+  $(`lbl-${name}`).classList.toggle('ready', ready);
 }
 
 function updateHud(dt: number): void {
   const p = world.player;
-  $('hud-hp').innerHTML = Array.from({ length: PLAYER.hp }, (_, i) => `<span class="${i < p.hp ? '' : 'lost'}">◆</span>`).join('');
+  const usable = started && !paused && world.mode === 'play' && phase === 'play';
+  // 체력: 칸 블록. 체력 1 이하면 남은 칸·라벨 레드(점멸 없음), 피격 직후 잃은 칸은 잠깐 레드
+  const crit = p.hp <= 1;
+  hpEl.classList.toggle('crit', crit);
+  $('lbl-hp').classList.toggle('crit', crit);
+  hpSegs.forEach((seg, i) => {
+    seg.classList.toggle('lost', i >= p.hp);
+    seg.classList.toggle('fresh', i === p.hp && p.hurtT > 0);
+  });
+  gauge('cut', 1 - p.cutCool / tune.cutCooldown, usable);
+  gauge('dash', 1 - p.dashCool / tune.dashCooldown, usable);
   if (mode === 'journey') {
     const z = ZONES[zoneIndex];
-    $('hud-wave').textContent = `구역 ${zoneIndex + 1}/${ZONES.length} · ${z.name}`;
     const st = zoneStatus(z, world, zstate);
-    $('hud-goal').textContent = `목표: ${st.label}`;
+    zoneEl.classList.remove('hidden');
+    waveEl.classList.add('hidden');
+    $('hud-zone-tag').textContent = `Z${String(zoneIndex + 1).padStart(2, '0')}`;
+    $('hud-zone-name').textContent = z.name;
+    $('hud-zone-no').textContent = `${zoneIndex + 1}/${ZONES.length}`;
+    $('hud-goal').textContent = st.goal;
+    const count = $('hud-count');
+    count.textContent = st.count;
+    count.classList.toggle('done', st.countDone);
+    // 진행 눈금: 끝난 단계 그린 · 지금 단계 시안 · 남은 단계 테두리만
+    const key = `${st.pips.done}/${st.pips.total}`;
+    if (key !== pipsKey) {
+      pipsKey = key;
+      $('hud-pips').innerHTML = Array.from({ length: st.pips.total }, (_, i) => `<span class="${i < st.pips.done ? 'done' : i === st.pips.done ? 'now' : ''}"></span>`).join('');
+    }
     // 다음 단계가 자리를 요구하거나(트리거) 출현 지점에서 물러나야 하면 갈 곳에 안내 표지
     world.marker = st.marker ?? null;
     hintEl.textContent = st.hint;
     hintEl.classList.toggle('hidden', !st.hint || phase !== 'play');
   } else {
-    $('hud-wave').textContent = world.setup.waves ? `WAVE ${world.stats.wave}` : `실험: ${world.setup.name}`;
-    $('hud-goal').textContent = '';
+    zoneEl.classList.add('hidden');
+    waveEl.classList.remove('hidden');
+    waveEl.textContent = world.setup.waves ? `WAVE ${world.stats.wave}` : `실험: ${world.setup.name}`;
     hintEl.classList.add('hidden');
   }
   if (bannerT > 0) {
@@ -291,28 +359,19 @@ function updateHud(dt: number): void {
     if (bannerT < 0.6) banner.classList.add('fade');
     if (bannerT <= 0) banner.classList.add('hidden');
   }
-  const k = world.stats.kills;
-  $('k-terrain').textContent = String(k.fall + k.abyss);
-  $('k-air').textContent = String(k.air);
-  $('k-blade').textContent = String(k.blade);
-  $('k-launch').textContent = String(world.stats.launches);
-  $('k-fall').textContent = String(k.fall);
-  $('k-abyss').textContent = String(k.abyss);
-  $('k-shock').textContent = String(world.stats.shocks);
-  $('cool-cut').style.width = `${100 * (1 - p.cutCool / tune.cutCooldown)}%`;
-  $('cool-dash').style.width = `${100 * (1 - p.dashCool / tune.dashCooldown)}%`;
   for (const f of feed) f.t -= dt;
   while (feed.length && feed[feed.length - 1].t <= 0) feed.pop();
-  feedEl.innerHTML = feed.map((f) => `<div style="opacity:${Math.min(1, f.t * 2)}">${f.text}</div>`).join('');
+  feedEl.innerHTML = feed.map((f) => `<div class="${f.tone}" style="opacity:${Math.min(1, f.t * 2)}">${f.text}</div>`).join('');
 }
 
 const CAUSE_TEXT = { fall: '낙하 처치', abyss: '절대 심연 추락', blade: '칼날 처치', air: '공중 처치' } as const;
+const CAUSE_TONE: Record<keyof typeof CAUSE_TEXT, FeedTone> = { fall: 'terrain', abyss: 'terrain', blade: 'ink', air: 'air' };
 
 function handleEvents(events: GameEvent[]): void {
   // 한 번의 환원으로 여러 적이 떠도 알림은 하나
   if (events.some((e) => e.type === 'launch')) {
     sfx.launch();
-    pushFeed('지형 환원 — 에어본');
+    pushFeed('지형 환원 — 에어본', 'air');
   }
   for (const ev of events) {
     switch (ev.type) {
@@ -325,12 +384,12 @@ function handleEvents(events: GameEvent[]): void {
         break;
       case 'airHit':
         sfx.airHit();
-        pushFeed('공중 추가타');
+        pushFeed('공중 추가타', 'air');
         break;
       case 'kill':
         if (ev.cause === 'abyss') sfx.fall();
         else sfx.kill();
-        pushFeed(CAUSE_TEXT[ev.cause]);
+        pushFeed(CAUSE_TEXT[ev.cause], CAUSE_TONE[ev.cause]);
         break;
       case 'shock':
         sfx.shock();
@@ -340,7 +399,7 @@ function handleEvents(events: GameEvent[]): void {
         sfx.hurt();
         break;
       case 'fallAbyss':
-        if (ev.who === 'player') pushFeed('절대 심연에 빠짐 −1');
+        if (ev.who === 'player') pushFeed('절대 심연에 빠짐 −1', 'alert');
         break;
       case 'dash':
         sfx.dash();

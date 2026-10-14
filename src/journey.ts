@@ -57,6 +57,14 @@ export interface ZoneStatus {
   hint: string;
   /** 화면 안내 표지(가야 할 곳). 없으면 표시하지 않는다 */
   marker?: { cx: number; cy: number; r: number };
+  /** HUD 구역 블록 2행 왼쪽: 지금 단계·구간(예: "측량 2/3 포대", "구간 1/3 단애") */
+  goal: string;
+  /** HUD 구역 블록 2행 오른쪽 수치(예: "적 0/2", "준비", "출구 돌파") */
+  count: string;
+  /** 수치가 달성됐는가(단계의 적을 모두 쓰러뜨림·출구 도달) */
+  countDone: boolean;
+  /** 진행 눈금: 끝난 단계·구간 수 / 전체 */
+  pips: { done: number; total: number };
 }
 
 /** 구역 하나를 도는 동안의 진행 상태(구역에 들어갈 때마다 새로) */
@@ -380,28 +388,42 @@ export function zoneStatus(zone: Zone, world: World, st: ZoneState = newZoneStat
       if (st.pending) {
         // 다음 단계 준비 중: 다음 단계 이름과 어디로 가야 하는지
         const next = beats[st.beat + 1];
-        const label = `${word} ${st.beat + 2}/${beats.length} ${next.name} · 준비`;
+        const goal = `${word} ${st.beat + 2}/${beats.length} ${next.name}`;
+        const label = `${goal} · 준비`;
+        const block = { goal, count: '준비', countDone: false, pips: { done: st.beat + 1, total: beats.length } };
         // 숨 고르기가 끝났는데 플레이어가 출현 지점 4칸 안이라서 기다리는 중이면(지형 환원 대기가 겹쳐도) 물러날 곳(출발점)을 알린다
         if (st.wait <= 0 && beatBlock(world, next) === 'near') {
           const sp = world.setup.player;
-          return { done: false, label, hint: '적이 나타날 자리 바로 옆이다 — 청록 표지 쪽으로 물러나면 다음 단계가 시작된다', marker: { cx: sp.cx, cy: sp.cy, r: 2 } };
+          return { done: false, label, hint: '적이 나타날 자리 바로 옆이다 — 청록 표지 쪽으로 물러나면 다음 단계가 시작된다', marker: { cx: sp.cx, cy: sp.cy, r: 2 }, ...block };
         }
-        return { done: false, label, hint: next.prompt ?? next.hint, marker: next.trigger };
+        return { done: false, label, hint: next.prompt ?? next.hint, marker: next.trigger, ...block };
       }
+      const goal = `${word} ${st.beat + 1}/${beats.length} ${b.name}`;
+      const count = `적 ${n - alive}/${n}`;
+      const done = last && alive === 0;
       return {
-        done: last && alive === 0,
-        label: `${word} ${st.beat + 1}/${beats.length} ${b.name} · 적 ${n - alive}/${n}`,
+        done,
+        label: `${goal} · ${count}`,
         hint: b.hint,
+        goal,
+        count,
+        countDone: alive === 0,
+        pips: { done: st.beat + (done ? 1 : 0), total: beats.length },
       };
     }
     case 'reach': {
       const legs = zone.legs ?? [];
       const k = legIndex(zone, world);
       const leg = legs[k];
+      const done = inExit(world);
       return {
-        done: inExit(world),
+        done,
         label: leg ? `출구까지 돌파 · 구간 ${k + 1}/${legs.length} ${leg.name}` : '출구까지 돌파',
         hint: leg?.hint ?? '',
+        goal: leg ? `구간 ${k + 1}/${legs.length} ${leg.name}` : '출구까지 돌파',
+        count: '출구 돌파',
+        countDone: done,
+        pips: { done: done ? legs.length : k, total: legs.length },
       };
     }
   }

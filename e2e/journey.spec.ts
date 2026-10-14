@@ -377,8 +377,14 @@ test('첫 여정 완주: 타이틀 → 구역 1 균열 지대 → 구역 2 접�
   let j = await journey(page);
   expect(j).toMatchObject({ mode: 'journey', zone: 1, zoneId: 'rift', phase: 'play', beat: 1 });
   await expect(page.getByTestId('zone-banner')).toContainText('구역 1 — 균열 지대');
-  await expect(page.getByTestId('hud-goal')).toContainText('측량 1/3 첫 측량 · 적 0/1');
-  await expect(page.getByTestId('hud-wave')).toContainText('구역 1/3');
+  await expect(page.getByTestId('hud-goal')).toHaveText('측량 1/3 첫 측량');
+  await expect(page.getByTestId('hud-count')).toHaveText('적 0/1');
+  await expect(page.locator('#hud-zone-tag')).toHaveText('Z01');
+  await expect(page.locator('#hud-zone-name')).toHaveText('균열 지대');
+  await expect(page.locator('#hud-zone-no')).toHaveText('1/3');
+  await expect(page.locator('#hud-pips span')).toHaveCount(3);
+  await expect(page.locator('#hud-pips span.now')).toHaveCount(1);
+  await expect(page.getByTestId('hud-wave')).toBeHidden();
   await expect(page.getByTestId('hint')).toBeVisible();
   expect(await hudGeometry(page)).toEqual([]);
   await shot(page, '12-journey-zone1');
@@ -407,7 +413,9 @@ test('첫 여정 완주: 타이틀 → 구역 1 균열 지대 → 구역 2 접�
   expect(s.time).toBeLessThan(0.5);
   expect(s.stats.cuts).toBe(0);
   expect(s.enemies.length).toBe(9);
-  await expect(page.getByTestId('hud-goal')).toContainText('출구까지 돌파 · 구간 1/3 단애');
+  await expect(page.getByTestId('hud-goal')).toHaveText('구간 1/3 단애');
+  await expect(page.getByTestId('hud-count')).toHaveText('출구 돌파');
+  await expect(page.locator('#hud-zone-tag')).toHaveText('Z02');
   await expect(page.getByTestId('hint')).toContainText('활강');
   expect(await hudGeometry(page)).toEqual([]);
   await page.waitForTimeout(2600); // 구역 배너가 사라진 뒤의 전장

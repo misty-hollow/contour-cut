@@ -96,9 +96,9 @@ test('적 낙하: 메사 위의 적은 땅째 떨어져 피해·기절, 계단 �
   await expect(page.getByTestId('title')).toBeHidden();
   await cutAt(page, cellC(18), cellC(29));
   await expect.poll(async () => (await snap(page)).stats.kills.abyss, { message: '심연 처치' }).toBe(1);
-  await expect(page.locator('#k-abyss')).toHaveText('1');
-  await expect(page.locator('#k-terrain')).toHaveText('1');
-  await expect(page.getByTestId('feed')).toContainText('심연 추락');
+  // 처치 통계는 전투 HUD에서 빠졌다(UI System 01 — 결과·게임 오버 화면에만). 알림 줄은 지형 처치 색(오렌지)
+  await expect(page.locator('#feed .terrain')).toContainText('심연 추락');
+  await expect(page.locator('#k-abyss, #k-terrain, [data-testid="hud-kills"]')).toHaveCount(0);
   await shot(page, '06-abyss-kill');
   expect(errors).toEqual([]);
 });
@@ -170,7 +170,7 @@ for (const calm of [false, true]) {
     const s2 = await snap(page);
     expect(target.time, '환원은 절단 뒤 약 7초(게임 시간)').toBeGreaterThan(s2.tune.restoreSec - 0.5);
     if (calm) expect((await page.evaluate(() => window.__cc.camera())).zoom).toBe(1);
-    await expect(page.getByTestId('feed')).toContainText(/공중 (추가타|처치)/);
+    await expect(page.locator('#feed .air', { hasText: /공중 (추가타|처치)/ }).first()).toBeVisible();
     if (!calm) await shot(page, '11-combo-airhit');
     expect(await hudGeometry(page)).toEqual([]);
     expect(errors).toEqual([]);

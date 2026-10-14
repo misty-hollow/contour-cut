@@ -5,6 +5,15 @@
   --cyan: #19f5c8;
   --magenta: #ff4fa3;
   --panel: rgba(4, 6, 16, 0.88);
+  /* 전투 HUD 토큰(UI System v0.1 06): 의미가 색을 정한다. 한 요소에 신호색은 하나 */
+  --ui-bg: rgba(14, 17, 22, 0.8);
+  --ui-frame: #3a4252;
+  --ui-ink: #e2e6f0;
+  --ui-dim: #8a95ad;
+  --sig-cyan: #00e5ff; /* 계측: 준비·진행 중·에어본 */
+  --sig-terrain: #ff5e1e; /* 지형: 절단·침하·지형 처치 */
+  --sig-alert: #ff3355; /* 플레이어 위험 */
+  --sig-ok: #9ae66e; /* 달성 */
   color-scheme: dark;
 }
 
@@ -23,10 +32,10 @@ body {
 }
 
 #stage {
+  /* 크기·위치는 main.ts layout()이 기기 픽셀 경계에 맞춰 정한다 */
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  left: 0;
+  top: 0;
   --s: 2;
 }
 
@@ -38,87 +47,280 @@ body {
   cursor: none;
 }
 
+/* ── 전투 HUD (UI System v0.1 01, 1단계 HUD 다이어트). 치수는 u = 게임 1px = var(--s) CSS px ── */
 #hud {
   position: absolute;
   inset: 0;
   pointer-events: none;
   font-size: calc(5.5px * var(--s));
-  line-height: 1.35;
-  text-shadow: 0 0 calc(2px * var(--s)) #000;
+  line-height: 1.25;
+  color: var(--ui-ink);
 }
 
 .hud-box {
   position: absolute;
-  padding: calc(1px * var(--s)) calc(3px * var(--s));
-  background: rgba(2, 3, 10, 0.55);
+  padding: calc(3px * var(--s)) calc(4px * var(--s));
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-frame);
   white-space: nowrap;
 }
 
+/* 구역 블록 · 좌상단 */
 #hud-tl {
-  left: calc(2px * var(--s));
-  top: calc(2px * var(--s));
+  left: calc(4px * var(--s));
+  top: calc(4px * var(--s));
+  min-width: calc(118px * var(--s));
+  display: flex;
+  flex-direction: column;
+  gap: calc(2px * var(--s));
 }
-#hud-tr {
-  right: calc(2px * var(--s));
-  top: calc(2px * var(--s));
-  text-align: right;
-}
-#hud-bl {
-  left: calc(2px * var(--s));
-  bottom: calc(2px * var(--s));
-}
-#hud-br {
-  right: calc(2px * var(--s));
-  bottom: calc(2px * var(--s));
-  color: var(--dim);
-}
-
-#hud-hp {
-  letter-spacing: calc(1px * var(--s));
-  color: var(--cyan);
-}
-#hud-hp .lost {
-  color: #2a3150;
-}
-#hud-wave,
-.sub {
-  color: var(--dim);
-}
-#hud-tr b {
-  color: var(--cyan);
-}
-
-.cool {
+.zb-row {
   display: flex;
   align-items: center;
   gap: calc(3px * var(--s));
 }
-.cool span {
-  width: calc(14px * var(--s));
+.zb-tag {
+  font-size: calc(4.5px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  line-height: 1.35;
+  color: var(--sig-cyan);
+  border: 1px solid var(--sig-cyan);
+  padding: 0 calc(1.5px * var(--s));
 }
-.cool i {
-  display: block;
-  width: calc(30px * var(--s));
-  height: calc(2px * var(--s));
-  background: #1a2040;
+.zb-name {
+  font-size: calc(6px * var(--s));
 }
-.cool u {
+.zb-no {
+  margin-left: auto;
+  font-size: calc(4.5px * var(--s));
+  color: var(--ui-dim);
+}
+.zb-goal {
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(6px * var(--s));
+}
+#hud-count {
+  font-size: calc(6px * var(--s));
+  color: var(--sig-cyan);
+}
+#hud-count.done {
+  color: var(--sig-ok);
+}
+.zb-pips {
+  display: flex;
+  gap: calc(1px * var(--s));
+}
+.zb-pips span {
   display: block;
-  height: 100%;
-  width: 100%;
-  background: var(--cyan);
+  width: calc(12px * var(--s));
+  height: calc(1.5px * var(--s));
+  outline: 1px solid var(--ui-frame);
+  outline-offset: -1px;
+}
+.zb-pips .done {
+  background: var(--sig-ok);
+  outline-color: var(--sig-ok);
+}
+.zb-pips .now {
+  background: var(--sig-cyan);
+  outline-color: var(--sig-cyan);
 }
 
+/* 무한 웨이브·실험 시나리오 한 줄 · 우상단 */
+#hud-tr {
+  right: calc(4px * var(--s));
+  top: calc(4px * var(--s));
+  padding: calc(2px * var(--s)) calc(4px * var(--s));
+  font-size: calc(6px * var(--s));
+  font-weight: 700;
+}
+
+/* 계기 묶음 · 좌하단: 라벨열 14u, 행 간격 2u */
+#hud-bl {
+  left: calc(4px * var(--s));
+  bottom: calc(4px * var(--s));
+  padding: calc(3px * var(--s));
+  display: grid;
+  grid-template-columns: calc(14px * var(--s)) auto;
+  column-gap: calc(3px * var(--s));
+  row-gap: calc(2px * var(--s));
+  align-items: center;
+}
+.g-label {
+  color: var(--ui-dim);
+}
+.g-label.ready {
+  color: var(--ui-ink);
+}
+.g-label.crit {
+  color: var(--sig-alert);
+}
+.g-hp {
+  display: flex;
+  gap: calc(1px * var(--s));
+  align-items: center;
+}
+.g-hp span {
+  display: block;
+  width: calc(6px * var(--s));
+  height: calc(3.5px * var(--s));
+  background: var(--ui-ink);
+  outline: 1px solid var(--ui-ink);
+  outline-offset: -1px;
+}
+.g-hp.crit span {
+  background: var(--sig-alert);
+  outline-color: var(--sig-alert);
+}
+.g-hp span.lost {
+  background: transparent;
+  outline-color: var(--ui-frame);
+}
+/* 피격 직후 잃은 칸은 0.3초 레드로 남는다 */
+.g-hp span.lost.fresh {
+  background: var(--sig-alert);
+  outline-color: var(--sig-alert);
+}
+.g-row {
+  display: flex;
+  align-items: center;
+  gap: calc(2px * var(--s));
+}
+.g-track {
+  position: relative;
+  width: calc(40px * var(--s));
+  background: #151a22;
+  outline: 1px solid var(--ui-frame);
+  outline-offset: -1px;
+}
+.g-track.off {
+  background: repeating-linear-gradient(135deg, #151a22 0 calc(1px * var(--s)), #232a36 calc(1px * var(--s)) calc(2px * var(--s)));
+}
+.g-track.off u {
+  visibility: hidden;
+}
+.g-cut {
+  height: calc(3px * var(--s));
+}
+.g-dash {
+  height: calc(2px * var(--s));
+}
+.g-track u {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+}
+.g-cut u {
+  background: rgba(255, 94, 30, 0.42);
+}
+.g-cut.ready u {
+  background: var(--sig-terrain);
+}
+.g-dash u {
+  background: rgba(0, 229, 255, 0.38);
+}
+.g-dash.ready u {
+  background: var(--sig-cyan);
+}
+/* 절단 트랙 25% 눈금 */
+.g-cut i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #0e1116;
+}
+.g-cut i:nth-of-type(1) {
+  left: 25%;
+}
+.g-cut i:nth-of-type(2) {
+  left: 50%;
+}
+.g-cut i:nth-of-type(3) {
+  left: 75%;
+}
+.g-lamp {
+  display: block;
+  outline: 1px solid var(--ui-frame);
+  outline-offset: -1px;
+}
+.g-sq {
+  width: calc(3px * var(--s));
+  height: calc(3px * var(--s));
+}
+.g-dia {
+  width: calc(2.4px * var(--s));
+  height: calc(2.4px * var(--s));
+  margin: 0 calc(0.3px * var(--s));
+  transform: rotate(45deg);
+}
+.g-sq.on {
+  background: var(--sig-terrain);
+  outline-color: var(--sig-terrain);
+}
+.g-dia.on {
+  background: var(--sig-cyan);
+  outline-color: var(--sig-cyan);
+}
+
+/* 키 안내 · 우하단 */
+#hud-br {
+  position: absolute;
+  right: calc(4px * var(--s));
+  bottom: calc(4px * var(--s));
+  color: var(--ui-dim);
+  white-space: nowrap;
+  text-shadow: 0 0 calc(2px * var(--s)) #000;
+}
+
+/* 알림 줄 · 상단 가운데. 색 = 원인 */
 #feed {
   position: absolute;
   left: 50%;
-  top: calc(3px * var(--s));
+  top: calc(4px * var(--s));
   transform: translateX(-50%);
   text-align: center;
-  color: #e8ff3a;
+  white-space: nowrap;
+  font-size: calc(6px * var(--s));
+  font-weight: 700;
+  text-shadow: 0 0 calc(2px * var(--s)) #000;
+  color: var(--ui-ink);
 }
 #feed div {
   transition: opacity 0.4s;
+}
+#feed .terrain {
+  color: var(--sig-terrain);
+}
+#feed .air {
+  color: var(--sig-cyan);
+}
+#feed .alert {
+  color: var(--sig-alert);
+}
+
+/* 전술 힌트 · 하단 가운데: 좌하단 계기·우하단 안내와 가로로 겹치지 않는 최대폭 240u, 두 줄까지 */
+#hint {
+  left: 50%;
+  bottom: calc(6px * var(--s));
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(240px * var(--s));
+  padding: calc(1.5px * var(--s)) calc(4px * var(--s));
+  background: rgba(14, 17, 22, 0.72);
+  border: 0;
+  border-top: 1px solid rgba(0, 229, 255, 0.45);
+  white-space: normal;
+  /* 두 줄로 꺾이면 두 줄 길이를 고르게(끝 몇 글자만 넘어가는 고아 줄 방지 — UI System 01의 pretty 의도) */
+  text-wrap: balance;
+  /* 한글은 기본이 글자 단위 줄바꿈 — 낱말 중간("대 / 지")에서 꺾이지 않게 띄어쓰기에서만 */
+  word-break: keep-all;
+  text-align: center;
+  text-shadow: 0 0 calc(2px * var(--s)) #000;
 }
 
 .overlay {
@@ -210,21 +412,6 @@ body {
   border: 0;
   cursor: pointer;
   box-shadow: calc(2px * var(--s)) calc(2px * var(--s)) 0 var(--magenta);
-}
-#hud-goal {
-  color: #e8ff3a;
-}
-/* 전술 힌트: 화면 아래 가운데, 좌우 HUD 상자 사이 */
-#hint {
-  left: 50%;
-  bottom: calc(14px * var(--s));
-  transform: translateX(-50%);
-  max-width: 84%;
-  white-space: normal;
-  text-align: center;
-  color: var(--ink);
-  border-top: calc(0.5px * var(--s)) solid rgba(25, 245, 200, 0.5);
-  font-size: calc(5px * var(--s));
 }
 #zone-clear-grade b {
   font-size: calc(10px * var(--s));
