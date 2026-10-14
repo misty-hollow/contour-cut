@@ -2,7 +2,7 @@ import './style.css';
 import { Sfx } from './audio';
 import { FIXED_DT, LEVEL_PX, ORIGIN_Y, PLAYER, VIEW_H, VIEW_W, tune, type Tune } from './config';
 import { Controls } from './input';
-import { ZONES, zoneStatus, zoneTick } from './journey';
+import { journeyTotals, parseZoneParam, zoneResult, ZONES, zoneStatus, zoneTick, type ZoneResult } from './journey';
 import { DEFAULT_SEED, SCENARIOS } from './maps';
 import { Renderer } from './render';
 import { emptyInput, World, type GameEvent } from './world';
@@ -32,11 +32,11 @@ const input = emptyInput();
 type PlayMode = 'journey' | 'waves' | 'scenario';
 type Phase = 'play' | 'zoneClear' | 'complete';
 let mode: PlayMode = scenario ? 'scenario' : 'journey';
-const zoneParam = Number(params.get('zone'));
-const firstZone = zoneParam >= 1 && zoneParam <= ZONES.length ? zoneParam - 1 : 0;
+const firstZone = parseZoneParam(params.get('zone'));
 let zoneIndex = firstZone;
 let phase: Phase = 'play';
-const totals = { cuts: 0, terrainKills: 0, airKills: 0, bladeKills: 0, airHits: 0, launches: 0, time: 0 };
+/** 구역별 결과. 같은 구역을 다시 깨면 덮어써서 최종 집계에 두 번 들어가지 않는다 */
+let results: (ZoneResult | undefined)[] = [];
 
 function makeWorld(): World {
   return mode === 'journey' ? new World(null, seed, ZONES[zoneIndex].build()) : new World(scenario, seed);
@@ -124,13 +124,8 @@ function nextZone(): void {
 
 function onZoneClear(): void {
   const s = world.stats;
-  totals.cuts += s.cuts;
-  totals.terrainKills += s.kills.fall + s.kills.abyss;
-  totals.airKills += s.kills.air;
-  totals.bladeKills += s.kills.blade;
-  totals.airHits += s.airHits;
-  totals.launches += s.launches;
-  totals.time += world.time;
+  results[zoneIndex] = zoneResult(world);
+  const totals = journeyTotals(results);
   const z = ZONES[zoneIndex];
   sfx.shock();
   if (zoneIndex === ZONES.length - 1) {
@@ -153,7 +148,7 @@ function restart(newSeed?: number): void {
   if (mode === 'journey') {
     // 여정 중 R = 이 구역 다시. 최종 클리어 뒤 R = 여정 처음부터
     if (phase === 'complete') {
-      for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] = 0;
+      results = [];
       enterZone(0);
     } else enterZone(zoneIndex);
     return;

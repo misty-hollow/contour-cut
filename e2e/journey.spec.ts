@@ -189,3 +189,25 @@ test('첫 여정 도중 R: 진행 중인 구역을 처음 상태로 다시(구�
   expect(s.time).toBeLessThan(0.3);
   expect(errors).toEqual([]);
 });
+
+for (const raw of ['1.5', 'abc']) {
+  test(`잘못된 구역 주소(?zone=${raw})에서도 타이틀이 뜨고 첫 여정(구역 1)·무한 웨이브 둘 다 시작된다`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(m.text());
+    });
+    await page.goto(`/?zone=${raw}`);
+    await expect(page.getByTestId('title')).toBeVisible();
+    await expect(page.getByTestId('start')).toHaveText('첫 여정 시작');
+    await page.getByTestId('start').click();
+    await expect(page.getByTestId('title')).toBeHidden();
+    expect((await journey(page))).toMatchObject({ mode: 'journey', zone: 1, phase: 'play' });
+    await page.goto(`/?zone=${raw}`);
+    await page.getByTestId('start-waves').click();
+    await expect.poll(async () => (await snap(page)).stats.wave, { message: '웨이브 시작' }).toBeGreaterThanOrEqual(1);
+    expect((await journey(page)).mode).toBe('waves');
+    expect(errors).toEqual([]);
+  });
+}
+

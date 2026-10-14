@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CELL, FIXED_DT, GRID_H, GRID_W, tune } from './config';
 import { buildFlowField } from './flowfield';
-import { inExit, ZONE1_MESA, ZONE1_PLATEAUS, ZONE2_EXIT, ZONE3_HILLS, ZONES, zoneStatus, zoneTick } from './journey';
+import { inExit, journeyTotals, parseZoneParam, ZONE1_MESA, ZONE1_PLATEAUS, ZONE2_EXIT, ZONE3_HILLS, ZONES, zoneResult, zoneStatus, zoneTick } from './journey';
 import { cellCenter } from './maps';
 import { isAbyss, stepKind, Terrain } from './terrain';
 import { emptyInput, World, type Input } from './world';
@@ -175,3 +175,32 @@ describe('구역 3 — 환원 구역', () => {
     expect(w.enemies.length).toBe(0);
   });
 });
+
+describe('구역 번호 주소(?zone=N)', () => {
+  it('1~3 정수만 받고, 소수·0·범위 밖·문자·빈 값은 구역 1(리뷰 재현: 1.5·2.5)', () => {
+    expect(parseZoneParam('1')).toBe(0);
+    expect(parseZoneParam('2')).toBe(1);
+    expect(parseZoneParam('3')).toBe(2);
+    for (const bad of ['1.5', '2.5', '0', '4', '-1', 'abc', '', '  ', 'NaN', 'Infinity']) expect(parseZoneParam(bad), bad).toBe(0);
+    expect(parseZoneParam(null)).toBe(0);
+    // 어떤 값이든 구역 배치를 만들 수 있어야 한다(초기화 예외 없음)
+    for (const raw of ['1.5', '2.5', 'abc', null]) expect(() => ZONES[parseZoneParam(raw)].build()).not.toThrow();
+  });
+});
+
+describe('최종 집계', () => {
+  it('같은 구역을 다시 깨면 그 구역 결과를 덮어써 두 번 더해지지 않는다', () => {
+    const w = zoneWorld(0);
+    w.stats.cuts = 4;
+    w.stats.kills.abyss = 3;
+    const results = [zoneResult(w)];
+    const again = zoneWorld(0);
+    again.stats.cuts = 6;
+    again.stats.kills.abyss = 4;
+    results[0] = zoneResult(again);
+    const t = journeyTotals(results);
+    expect(t.cuts).toBe(6);
+    expect(t.terrainKills).toBe(4);
+  });
+});
+

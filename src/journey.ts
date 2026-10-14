@@ -142,6 +142,42 @@ export const ZONES: Zone[] = [
   { id: 'restore', name: '환원 구역', goal: `지형 환원으로 띄운 적에게 공중 추가타 ${ZONE3_AIR_HITS}회`, kind: 'airHits', target: ZONE3_AIR_HITS, build: buildZone3 },
 ];
 
+/** `?zone=N` 해석: 1~구역 수의 정수만 받아 0부터 세는 번호로. 그 밖(소수·0·범위 밖·문자·없음)은 구역 1 */
+export function parseZoneParam(raw: string | null, count: number = ZONES.length): number {
+  if (raw === null || raw.trim() === '') return 0;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= count ? n - 1 : 0;
+}
+
+/** 구역 하나의 결과(최종 집계용). 같은 구역을 다시 깨면 덮어쓴다 */
+export interface ZoneResult {
+  cuts: number;
+  terrainKills: number;
+  airKills: number;
+  bladeKills: number;
+  airHits: number;
+  time: number;
+}
+
+export function zoneResult(world: World): ZoneResult {
+  const s = world.stats;
+  return {
+    cuts: s.cuts,
+    terrainKills: s.kills.fall + s.kills.abyss,
+    airKills: s.kills.air,
+    bladeKills: s.kills.blade,
+    airHits: s.airHits,
+    time: world.time,
+  };
+}
+
+/** 구역별 결과의 합계 */
+export function journeyTotals(results: readonly (ZoneResult | undefined)[]): ZoneResult {
+  const t: ZoneResult = { cuts: 0, terrainKills: 0, airKills: 0, bladeKills: 0, airHits: 0, time: 0 };
+  for (const r of results) if (r) for (const k of Object.keys(t) as (keyof ZoneResult)[]) t[k] += r[k];
+  return t;
+}
+
 /** 플레이어가 출구 표지 안에 서 있는가(평면 거리) */
 export function inExit(world: World): boolean {
   const e = world.setup.exit;
