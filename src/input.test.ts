@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CELL, FIXED_DT, LEVEL_PX, ORIGIN_Y, tune } from './config';
-import { enemyUnderCursor } from './input';
+import { enemyUnderCursor, resolveAim } from './input';
 import { emptyInput, World } from './world';
 
 const c = (n: number) => (n + 0.5) * CELL;
@@ -59,5 +59,36 @@ describe('보이는 적 조준', () => {
     inp.cut = true;
     w.step(FIXED_DT, inp);
     expect(w.stats.airHits).toBe(1);
+  });
+});
+
+describe('지형에 가려진 적은 조준을 가로채지 않는다', () => {
+  it('메사 북쪽에 완전히 가려진 적: 지형을 가리키면 잡히지 않고 기존 역투영 좌표 그대로(리뷰 재현 사례)', () => {
+    const w = new World('cut', 1);
+    const e = w.spawnEnemy('chaser', 291, 57, 60, false);
+    expect(e.z).toBe(1);
+    // 상자 판정만 하면 잡혔다(지형 정보 없이)
+    expect(enemyUnderCursor(291, 67, w.enemies)?.id).toBe(e.id);
+    // 렌더러 순서대로 보면 그 픽셀은 메사(10·11행)가 덮는다
+    expect(enemyUnderCursor(291, 67, w.enemies, w.terrain)).toBeNull();
+    const a = resolveAim(291, 67, w.player.z, w.enemies, w.terrain);
+    expect(a.target).toBeNull();
+    expect(a.x).toBe(291);
+    expect(a.y).toBe(67 - ORIGIN_Y + w.player.z * LEVEL_PX);
+  });
+
+  it('일부만 가려진 적: 메사 위로 드러난 머리 쪽은 잡히고, 메사가 덮은 발 쪽은 잡히지 않는다', () => {
+    const w = new World('cut', 1);
+    const e = w.spawnEnemy('chaser', 291, 50, 60, false);
+    // 발끝 화면 y = 50 + 20 - 4 = 66. 메사 10행 윗면은 y = 64부터
+    expect(enemyUnderCursor(291, 58, w.enemies, w.terrain)?.id).toBe(e.id);
+    expect(enemyUnderCursor(291, 65, w.enemies, w.terrain)).toBeNull();
+  });
+
+  it('환원으로 떠오른 공중 적은 앞쪽 지형보다 높이 그려지므로 그대로 잡힌다', () => {
+    const w = launchedApex();
+    const e = w.enemies[0];
+    const b = bodyOnScreen(e);
+    expect(enemyUnderCursor(b.x, b.y, w.enemies, w.terrain)?.id).toBe(e.id);
   });
 });

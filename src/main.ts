@@ -259,7 +259,7 @@ function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (started && !paused && world.mode === 'play') {
-    controls.fill(input, world.player, world.enemies);
+    controls.fill(input, world.player, world.enemies, world.terrain);
     acc += dt;
     let n = 0;
     while (acc >= FIXED_DT && n < 6) {
@@ -271,7 +271,7 @@ function frame(now: number): void {
     if (world.isOver()) showOver();
   } else if (started) {
     // 정지 중에도 조준은 갱신
-    controls.fill(input, world.player, world.enemies);
+    controls.fill(input, world.player, world.enemies, world.terrain);
     input.cut = input.dash = input.dashToAim = false;
   }
   const events = world.events;

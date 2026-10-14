@@ -12,6 +12,9 @@ export const OUT_OF_BOUNDS = 99;
 export const FIXED_DT = 1 / 60;
 export const GRAVITY = 60; // 고도 단계/s²
 
+/** 평면 y·고도 z → 480×270 화면 y. 렌더러와 조준 판정이 같은 식을 쓴다 */
+export const screenY = (y: number, z: number): number => Math.round(y + ORIGIN_Y - z * LEVEL_PX);
+
 // 조정값. 튜닝 패널(T키)이 실행 중에 바꾼다. 규칙의 의미는 바뀌지 않는다(CLAUDE.md C절 예외).
 export const tune = {
   cutDrop: 3, // 베인 등고선 안쪽이 내려앉는 단계 수

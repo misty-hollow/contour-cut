@@ -1,4 +1,4 @@
-import { CELL, ENEMY, GRID_H, GRID_W, LEVEL_PX, ORIGIN_Y, VIEW_H, VIEW_W, tune } from './config';
+import { CELL, ENEMY, GRID_H, GRID_W, VIEW_H, VIEW_W, screenY, tune } from './config';
 import { isAbyss } from './terrain';
 import type { Enemy, GameEvent, World } from './world';
 
@@ -49,7 +49,7 @@ interface Ring {
   color: string;
 }
 
-const sy = (y: number, z: number) => Math.round(y + ORIGIN_Y - z * LEVEL_PX);
+const sy = screenY;
 
 /** 카메라 상태(관찰용). zoom 1 = 연출 없음 */
 export interface CameraState {
