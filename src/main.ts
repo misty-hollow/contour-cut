@@ -26,6 +26,9 @@ if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
   tune.zoomFx = 0;
 }
 const sfx = new Sfx();
+// 타이틀 동안에는 전투 HUD를 숨긴다(타이틀 뒤로 지도만 보이게)
+document.body.classList.add('pre');
+renderer.titleScan = true;
 const input = emptyInput();
 
 // 플레이 방식: 첫 여정(기본) · 무한 웨이브 · 실험 시나리오(?scenario=)
@@ -108,12 +111,16 @@ function start(asWaves = false): void {
   sfx.unlock();
   started = true;
   title.classList.add('hidden');
+  document.body.classList.remove('pre');
+  renderer.titleScan = false;
   if (asWaves) {
     mode = 'waves';
     world = makeWorld();
   } else if (mode === 'journey') {
     enterZone(zoneIndex);
   }
+  // 측량 신호가 지도를 드러내며 시작(구역 진입·재시작과 같은 연출)
+  renderer.resetFx();
   last = performance.now();
 }
 $('start').addEventListener('click', () => start());
@@ -155,7 +162,9 @@ function onZoneClear(): void {
   results[zoneIndex] = zoneResult(world);
   const totals = journeyTotals(results);
   const z = ZONES[zoneIndex];
-  sfx.shock();
+  sfx.clear();
+  // 돌파 화면 뒤로 전투 알림이 비치지 않게
+  feed.length = 0;
   if (zoneIndex === ZONES.length - 1) {
     phase = 'complete';
     $('journey-stats').innerHTML =
@@ -290,6 +299,7 @@ syncHelp();
 type FeedTone = 'ink' | 'terrain' | 'air' | 'alert';
 const feed: { text: string; t: number; tone: FeedTone }[] = [];
 const hintEl = $('hint');
+let hintSince = 0;
 const feedEl = $('feed');
 const zoneEl = $('hud-tl');
 const waveEl = $('hud-tr');
@@ -346,7 +356,10 @@ function updateHud(dt: number): void {
     }
     // 다음 단계가 자리를 요구하거나(트리거) 출현 지점에서 물러나야 하면 갈 곳에 안내 표지
     world.marker = st.marker ?? null;
+    // 힌트는 바뀐 순간 또렷하게, 같은 문구가 8초 넘게 이어지면 옅어진다(피격하면 다시 또렷하게)
+    if (hintEl.textContent !== st.hint || p.hurtT > 0) hintSince = world.time;
     hintEl.textContent = st.hint;
+    hintEl.classList.toggle('quiet', world.time - hintSince > 8);
     hintEl.classList.toggle('hidden', !st.hint || phase !== 'play');
   } else {
     zoneEl.classList.add('hidden');
@@ -367,6 +380,28 @@ function updateHud(dt: number): void {
 const CAUSE_TEXT = { fall: '낙하 처치', abyss: '절대 심연 추락', blade: '칼날 처치', air: '공중 처치' } as const;
 const CAUSE_TONE: Record<keyof typeof CAUSE_TEXT, FeedTone> = { fall: 'terrain', abyss: 'terrain', blade: 'ink', air: 'air' };
 
+/** 환원 경고: 같은 시각에 돌아올 칸 묶음이 경고 시간에 들어서면 한 번 똑딱 */
+const warned = new Set<number>();
+let warnedWorld: World | null = null;
+function restoreWarnTick(): void {
+  // 구역 진입·재시작으로 세계가 바뀌면 시각이 0부터 다시 흐르므로 기록을 비운다
+  if (warnedWorld !== world) {
+    warned.clear();
+    warnedWorld = world;
+  }
+  const t = world.terrain;
+  const now = world.time;
+  for (const k of warned) if (k < now * 1000) warned.delete(k);
+  for (let i = 0; i < t.restoreAt.length; i++) {
+    const at = t.restoreAt[i];
+    if (at === Infinity || at - now > tune.restoreWarnSec) continue;
+    const key = Math.round(at * 1000);
+    if (warned.has(key)) continue;
+    warned.add(key);
+    sfx.warn();
+  }
+}
+
 function handleEvents(events: GameEvent[]): void {
   // 한 번의 환원으로 여러 적이 떠도 알림은 하나
   if (events.some((e) => e.type === 'launch')) {
@@ -376,7 +411,7 @@ function handleEvents(events: GameEvent[]): void {
   for (const ev of events) {
     switch (ev.type) {
       case 'slash':
-        sfx.slash();
+        sfx.slash(ev.crossings.reduce((m, c) => Math.max(m, c.level), -1));
         if (ev.cells.length) sfx.collapse(ev.cells.length);
         break;
       case 'hit':
@@ -389,17 +424,21 @@ function handleEvents(events: GameEvent[]): void {
       case 'kill':
         if (ev.cause === 'abyss') sfx.fall();
         else sfx.kill();
-        pushFeed(CAUSE_TEXT[ev.cause], CAUSE_TONE[ev.cause]);
+        // 칼날 처치는 흔한 일이라 알리지 않는다. 지형·공중 처치만 알림 줄에
+        if (ev.cause !== 'blade') pushFeed(CAUSE_TEXT[ev.cause], CAUSE_TONE[ev.cause]);
         break;
       case 'shock':
+        // 충격파는 고리·흔들림·소리로 충분하다(알림 줄은 비워 둔다)
         sfx.shock();
-        pushFeed('충격파');
         break;
       case 'hurt':
         sfx.hurt();
         break;
       case 'fallAbyss':
         if (ev.who === 'player') pushFeed('절대 심연에 빠짐 −1', 'alert');
+        break;
+      case 'restore':
+        sfx.restore(ev.cells.length);
         break;
       case 'dash':
         sfx.dash();
@@ -422,16 +461,18 @@ function handleEvents(events: GameEvent[]): void {
 function showOver(): void {
   const s = world.stats;
   const terrain = s.kills.fall + s.kills.abyss;
+  // 결과는 두 줄: 무엇으로 쓰러뜨렸나(큰 글자) · 어떻게 싸웠나(작은 글자)
   $('over-stats').innerHTML =
-    `${world.setup.waves ? `WAVE ${s.wave} · ` : ''}지형 처치 ${terrain} (낙하 ${s.kills.fall} · 절대 심연 ${s.kills.abyss}) · 공중 처치 ${s.kills.air} · 칼날 처치 ${s.kills.blade}<br>` +
-    `측량 절단 ${s.cuts}회 · 침하시킨 칸 ${s.cellsCollapsed} · 지형 환원 에어본 ${s.launches} · 공중 추가타 ${s.airHits} · 충격파 ${s.shocks} · 막아 낸 탄 ${s.boltsBlocked}`;
-  $('over-note').textContent = mode === 'journey' ? 'R 이 구역 다시 시도' : mode === 'waves' ? 'R 다시 시작 · N 새 지도' : 'R 다시 시작';
+    `<span class="big">${world.setup.waves ? `WAVE ${s.wave} · ` : ''}지형 처치 ${terrain} · 공중 처치 ${s.kills.air} · 칼날 처치 ${s.kills.blade}</span><br>` +
+    `<span class="small">측량 절단 ${s.cuts}회 · 에어본 ${s.launches} · 공중 추가타 ${s.airHits} · 충격파 ${s.shocks}</span>`;
+  $('over-note').innerHTML = `<b class="key">R</b> ${mode === 'journey' ? '이 구역 다시 시도' : mode === 'waves' ? '다시 시작 · N 새 지도' : '다시 시작'}`;
   over.classList.remove('hidden');
 }
 
 // ── 루프 ───────────────────────────────────────────────
 function frame(now: number): void {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  // rAF 시각이 클릭 처리에서 잰 last보다 이를 수 있다(첫 프레임 dt < 0) — 0 아래로 내려가지 않게
+  const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
   last = now;
   if (started && !paused && world.mode === 'play' && phase === 'play') {
     controls.fill(input, world.player, world.enemies, world.terrain);
@@ -446,7 +487,7 @@ function frame(now: number): void {
         const beat = zoneTick(z, world, zstate);
         if (beat !== null && z.beats) {
           pushFeed(`${z.beatWord ?? '측량'} ${beat + 1}/${z.beats.length} — ${z.beats[beat].name}`);
-          sfx.launch();
+          sfx.beat();
         }
         if (zoneStatus(z, world, zstate).done) {
           onZoneClear();
@@ -465,6 +506,7 @@ function frame(now: number): void {
   world.events = [];
   renderer.consume(events, world);
   handleEvents(events);
+  if (started && world.mode === 'play') restoreWarnTick();
   renderer.draw(world, dt, started && controls.mouse ? { x: input.aimX, y: input.aimY, cursor: controls.cursorView, target: controls.target } : null);
   updateHud(dt);
   requestAnimationFrame(frame);

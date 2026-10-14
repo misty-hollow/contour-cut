@@ -13,9 +13,17 @@ export interface Aim {
 
 // 측량 잉크 팔레트: 고도마다 다른 형광색 등고선, 어두운 남색 지면, 심연 테두리는 경고 적색
 export const LINE = ['#2f7bff', '#19f5c8', '#6cff4f', '#e8ff3a', '#ffb02e', '#ff4fa3', '#b77bff'];
-const TOP = ['#090b17', '#10142a', '#171d3c', '#1f274e', '#283161', '#313b73', '#3b4686'];
-const WALL = '#06070e';
-const WALL_STRIPE = '#0c0e1c';
+/**
+ * 지면 색 = 고도 단계 명도(남색 계단) + 그 고도 등고선 색을 조금 섞은 단채(hypsometric tint).
+ * 높을수록 밝고, 같은 높이의 땅은 같은 기운의 색이라 등고선이 끊긴 곳에서도 높이가 읽힌다.
+ */
+const RAMP = ['#0a0d1b', '#0c1124', '#151d3c', '#1f2a55', '#2a376c', '#344583', '#3f529a'];
+const TOP = RAMP.map((c, l) => mix(c, LINE[l], 0.05 + 0.015 * l));
+/** 절벽면: 윗면 색을 어둡게. 세로 빗금(지도의 우모선)은 더 어둡게 */
+const WALL = TOP.map((c) => mix(c, '#000000', 0.62));
+const WALL_STRIPE = TOP.map((c) => mix(c, '#000000', 0.8));
+/** 측량 눈금(5칸마다 + 표시). 고도만큼 위로 그려져 높낮이가 눈금 어긋남으로도 보인다 */
+const TICK = TOP.map((c) => mix(c, '#ffffff', 0.13));
 const ABYSS_RIM = '#ff2d55';
 const RIM = '#dffcff';
 const CHASER = '#ff3b3b';
@@ -54,6 +62,30 @@ interface Ring {
   color: string;
 }
 
+/** 방사형 섬광선(공중 추가타·처치) */
+interface Streak {
+  x: number;
+  y: number;
+  t: number;
+  max: number;
+  r0: number;
+  r1: number;
+  n: number;
+  rot: number;
+  color: string;
+}
+
+/** 처치 자리에 남는 측량 표시(×), 땅에 붙어 잠시 남는다 */
+interface Mark {
+  x: number;
+  y: number;
+  t: number;
+  color: string;
+}
+
+/** 구역 시작·재시작 때 플레이어에서 퍼지는 측량 신호가 지도를 드러내는 시간(초). 입력·시뮬레이션은 막지 않는다 */
+const INTRO_SEC = 0.45;
+
 const sy = screenY;
 
 /** 카메라 상태(관찰용). zoom 1 = 연출 없음 */
@@ -79,6 +111,12 @@ export class Renderer {
   private slashes: Slash[] = [];
   private rings: Ring[] = [];
   private ghosts: { x: number; y: number; z: number; t: number }[] = [];
+  private streaks: Streak[] = [];
+  private marks: Mark[] = [];
+  private beams: { x: number; y: number; t: number }[] = [];
+  private introT = INTRO_SEC;
+  /** 타이틀 화면: 지도를 위에서 아래로 훑는 측량 주사선 */
+  titleScan = false;
   private shakeT = 0;
   private shakeDur = 0;
   private shakeAmp = 0;
@@ -176,21 +214,27 @@ export class Renderer {
           this.zoomPunch(0.03);
           break;
         case 'launch':
-          // 지형 환원: 발밑에서 위로 솟는 잉크 파편
+          // 지형 환원: 발밑에서 위로 솟는 잉크 파편과 빛기둥
           this.burst(ev.x, sy(ev.y, ev.z), '#19f5c8', 10, 50, 0.45, -60);
           this.rings.push({ x: ev.x, y: sy(ev.y, ev.z), r: 9, t: 0, max: 0.25, color: '#19f5c8' });
+          this.beams.push({ x: Math.round(ev.x), y: sy(ev.y, ev.z), t: 0 });
           this.zoomPunch(0.015);
           break;
         case 'airHit':
           this.burst(ev.x, sy(ev.y, ev.z) - 4, '#ffffff', 12, 90, 0.3);
           this.burst(ev.x, sy(ev.y, ev.z) - 4, '#19f5c8', 8, 60, 0.35);
-          this.rings.push({ x: ev.x, y: sy(ev.y, ev.z) - 4, r: 8, t: 0, max: 0.16, color: '#ffffff' });
+          this.rings.push({ x: ev.x, y: sy(ev.y, ev.z) - 4, r: 13, t: 0, max: 0.2, color: '#ffffff' });
+          this.streaks.push({ x: ev.x, y: sy(ev.y, ev.z) - 5, t: 0, max: 0.16, r0: 5, r1: 17, n: 8, rot: Math.random(), color: '#ffffff' });
           this.shake(2.5, 0.14);
           this.zoomPunch(0.045);
           break;
         case 'kill': {
           const col = ev.kind === 'chaser' ? CHASER : SHOOTER;
-          if (ev.cause !== 'abyss') this.burst(ev.x, sy(ev.y, ev.z) - 4, col, 18, 80, 0.5);
+          if (ev.cause !== 'abyss') {
+            this.burst(ev.x, sy(ev.y, ev.z) - 4, col, 18, 80, 0.5);
+            this.streaks.push({ x: ev.x, y: sy(ev.y, ev.z) - 5, t: 0, max: 0.14, r0: 4, r1: 12, n: 6, rot: Math.random(), color: col });
+            this.marks.push({ x: Math.round(ev.x), y: sy(ev.y, ev.z), t: 0, color: col });
+          }
           this.shake(2, 0.15);
           this.zoomPunch(0.035);
           break;
@@ -198,11 +242,15 @@ export class Renderer {
         case 'fallAbyss':
           this.burst(ev.x, sy(ev.y, -1), ABYSS_RIM, 12, 30, 0.6, -20);
           break;
-        case 'hurt':
+        case 'hurt': {
           this.hurtT = 0.3;
           this.shake(4, 0.25);
-          this.burst(ev.x, sy(ev.y, world.player.z) - 4, '#ff6b6b', 10, 60, 0.35);
+          const pl = world.player;
+          this.burst(ev.x, sy(ev.y, pl.z) - 4, '#ff6b6b', 10, 60, 0.35);
+          // 맞은 자리를 분명히: 플레이어를 감싸고 퍼지는 적색 고리
+          this.rings.push({ x: pl.x, y: sy(pl.y, pl.z) - 5, r: 14, t: 0, max: 0.25, color: '#ff2d55' });
           break;
+        }
         case 'boltBlocked':
           this.burst(ev.x, sy(ev.y, ev.z), SHOOTER, 6, 40, 0.25);
           break;
@@ -250,6 +298,7 @@ export class Renderer {
 
     for (let cy = 0; cy < GRID_H; cy++) {
       for (let cx = 0; cx < GRID_W; cx++) this.drawCell(world, cx, cy);
+      this.drawGhostRow(world, cy);
       for (const f of rows[cy]) f();
     }
     this.drawOccluded(world, rowOf);
@@ -259,6 +308,8 @@ export class Renderer {
     this.drawBolts(world);
     if (aim && world.mode === 'play') this.drawAim(world, aim);
     this.drawFx(dt);
+    if (this.titleScan) this.drawScan();
+    this.drawIntro(world, dt);
     this.present(world, dt);
   }
 
@@ -329,16 +380,17 @@ export class Renderer {
     const top = sy(cy * CELL, s);
     const now = world.time;
 
-    // 남쪽 절벽면 + 지층선
+    // 남쪽 절벽면: 윗면 색을 어둡게 한 면 + 세로 빗금(우모선) + 고도마다 지층선
     const sShown = cy + 1 < GRID_H ? t.shown[i + GRID_W] : 0;
     const southTop = sy((cy + 1) * CELL, sShown);
     const wallTop = top + CELL;
     if (southTop > wallTop) {
-      ctx.fillStyle = WALL;
+      const wl = Math.max(0, Math.min(6, Math.floor(s)));
+      ctx.fillStyle = WALL[wl];
       ctx.fillRect(x, wallTop, CELL, southTop - wallTop);
-      ctx.fillStyle = WALL_STRIPE;
+      ctx.fillStyle = WALL_STRIPE[wl];
       for (let k = (cx & 1) * 3; k < CELL; k += 3) ctx.fillRect(x + k, wallTop, 1, southTop - wallTop);
-      ctx.globalAlpha = 0.7;
+      ctx.globalAlpha = 0.55;
       for (let lv = Math.floor(s) - 1; lv > sShown - 0.01 && lv >= 0; lv--) {
         ctx.fillStyle = LINE[lv + 1 > 6 ? 6 : lv + 1];
         ctx.fillRect(x, sy((cy + 1) * CELL, lv), CELL, 1);
@@ -359,34 +411,75 @@ export class Renderer {
     }
 
     const lvl = Math.min(6, h);
-    const flash = now - t.cutAt[i] < 0.07;
-    const restoring = this.clock - this.restoredAt[i] < 0.1;
-    ctx.fillStyle = flash ? '#ffffff' : restoring ? '#bff7ff' : TOP[lvl];
+    ctx.fillStyle = TOP[lvl];
     ctx.fillRect(x, top, CELL, CELL);
 
-    // 베인 지형: 균열 무늬, 복구 직전 깜빡임
-    if (t.isCut(i)) {
-      const left = t.restoreAt[i] - now;
-      const warn = left < tune.restoreWarnSec && Math.floor(this.clock * 10) % 2 === 0;
-      ctx.fillStyle = warn ? '#bff7ff' : '#6b3a8f';
-      const o = (cx + cy) % 3;
-      ctx.fillRect(x + o, top + 1, 1, 1);
-      ctx.fillRect(x + o + 1, top + 2, 1, 1);
-      ctx.fillRect(x + ((o + 3) % CELL), top + 4, 1, 1);
-      ctx.fillRect(x + ((o + 4) % CELL), top + 5, 1, 1);
+    // 그늘: 서쪽(빛이 오는 쪽)이 더 높으면 그 높이만큼 띠, 북쪽 절벽 밑동에는 얇은 접지 그늘
+    const sw = cx > 0 ? t.shown[i - 1] : s;
+    const sn = cy > 0 ? t.shown[i - GRID_W] : s;
+    if (sw > s + 0.5 || sn > s + 0.5) {
+      ctx.fillStyle = '#000000';
+      ctx.globalAlpha = 0.38;
+      if (sw > s + 0.5) ctx.fillRect(x, top, Math.min(4, Math.round((sw - s) * 1.3)), CELL);
+      if (sn > s + 0.5) ctx.fillRect(x, top, CELL, sn - s > 1.5 ? 2 : 1);
+      ctx.globalAlpha = 1;
     }
 
-    // 등고선: 나보다 낮은 이웃과의 경계에 내 고도의 색으로
+    // 측량 눈금: 5칸마다 작은 +
+    if (cx % 5 === 0 && cy % 5 === 0) {
+      ctx.fillStyle = TICK[lvl];
+      ctx.fillRect(x - 1, top, 3, 1);
+      ctx.fillRect(x, top - 1, 1, 3);
+    }
+
+    // 등고선: 나보다 낮은 이웃과의 경계에 내 고도의 색으로. 막 무너진 칸은 흰 섬광, 막 환원된 칸은 시안 섬광(선에만)
+    const flash = now - t.cutAt[i] < 0.08;
+    const restoring = this.clock - this.restoredAt[i] < 0.16;
     const edge = (nh: number) => nh < h || nh === -1;
     const hw = cx > 0 ? t.height[i - 1] : 99;
     const he = cx < GRID_W - 1 ? t.height[i + 1] : 99;
     const hn = cy > 0 ? t.height[i - GRID_W] : 99;
     const hs = cy < GRID_H - 1 ? t.height[i + GRID_W] : 99;
-    const col = (nh: number) => (isAbyss(nh) ? ABYSS_RIM : flash ? '#ffffff' : LINE[lvl]);
+    const col = (nh: number) => (isAbyss(nh) ? ABYSS_RIM : flash ? '#ffffff' : restoring ? '#bff7ff' : LINE[lvl]);
     if (edge(hn)) this.edgeLine(x, top, CELL, 1, col(hn), 0, 1);
     if (edge(hs)) this.edgeLine(x, top + CELL - 1, CELL, 1, col(hs), 0, -1);
     if (edge(hw)) this.edgeLine(x, top, 1, CELL, col(hw), 1, 0);
     if (edge(he)) this.edgeLine(x + CELL - 1, top, 1, CELL, col(he), -1, 0);
+  }
+
+  /**
+   * 기억된 등고선: 무너진 칸은 원래 등고선을 원래 높이에 점선으로 남긴다. 환원이 다가올수록 점선 → 파선 → 실선으로 차오르고,
+   * 경고 시간(마지막 restoreWarnSec)에는 흰색으로 깜빡인다. "어디가, 언제, 어디까지 솟는지"를 한 선으로 보여 준다.
+   */
+  private drawGhostRow(world: World, cy: number): void {
+    const t = world.terrain;
+    const ctx = this.ctx;
+    const now = world.time;
+    const blink = Math.floor(this.clock * 10) % 2 === 0;
+    for (let cx = 0; cx < GRID_W; cx++) {
+      const i = t.idx(cx, cy);
+      if (!t.isCut(i)) continue;
+      const L = t.base[i];
+      if (L < 0) continue;
+      const total = Math.max(0.01, t.restoreAt[i] - t.cutAt[i]);
+      const left = t.restoreAt[i] - now;
+      const prog = Math.max(0, Math.min(1, 1 - left / total));
+      const warn = left < tune.restoreWarnSec;
+      const density = warn ? 1 : prog < 0.45 ? 1 / 3 : prog < 0.8 ? 2 / 3 : 1;
+      ctx.fillStyle = warn ? (blink ? '#bff7ff' : '#19f5c8') : LINE[Math.min(6, L)];
+      ctx.globalAlpha = warn ? 0.95 : 0.3 + 0.4 * prog;
+      const x = cx * CELL;
+      const top = sy(cy * CELL, L);
+      const lower = (j: number) => t.base[j] < L;
+      const seg = (x0: number, y0: number, dx: number, dy: number) => {
+        for (let k = 0; k < CELL; k++) if (((x0 + y0 + k) % 3) / 3 < density - 0.001) ctx.fillRect(x0 + dx * k, y0 + dy * k, 1, 1);
+      };
+      if (cy > 0 && lower(i - GRID_W)) seg(x, top, 1, 0);
+      if (cy < GRID_H - 1 && lower(i + GRID_W)) seg(x, top + CELL - 1, 1, 0);
+      if (cx > 0 && lower(i - 1)) seg(x, top, 0, 1);
+      if (cx < GRID_W - 1 && lower(i + 1)) seg(x + CELL - 1, top, 0, 1);
+    }
+    ctx.globalAlpha = 1;
   }
 
   private edgeLine(x: number, y: number, w: number, h: number, color: string, ix: number, iy: number): void {
@@ -409,15 +502,7 @@ export class Renderer {
       drawSurveyor(ctx, Math.round(g.x), sy(g.y, g.z), p.facingX < 0, '#19f5c8', '#0b3a44');
     }
     ctx.globalAlpha = 1;
-    if (p.airborne) {
-      const gh = t.heightAt(p.x, p.y);
-      if (!isAbyss(gh)) {
-        ctx.fillStyle = '#000000';
-        ctx.globalAlpha = 0.6;
-        ctx.fillRect(x - 2, sy(p.y, gh) - 1, 5, 2);
-        ctx.globalAlpha = 1;
-      }
-    }
+    this.groundShadow(t, p.x, p.y, p.z);
     const blink = p.inv > 0 && p.dashT === 0 && Math.floor(this.clock * 20) % 2 === 0;
     if (p.z < -0.5) ctx.globalAlpha = Math.max(0, 1 + p.z / 5);
     if (!blink) drawSurveyor(ctx, x, y, p.facingX < 0, p.hurtT > 0 ? '#ff6b6b' : RIM, '#000000');
@@ -440,15 +525,7 @@ export class Renderer {
       if (e.deathCause !== 'abyss') return;
       ctx.globalAlpha = Math.max(0, 1 - e.deadT / 0.8);
     }
-    if (e.airborne && e.state !== 'dead') {
-      const gh = t.heightAt(e.x, e.y);
-      if (!isAbyss(gh)) {
-        ctx.fillStyle = '#000000';
-        ctx.globalAlpha = 0.6;
-        ctx.fillRect(x - 2, sy(e.y, gh) - 1, 5, 2);
-        ctx.globalAlpha = 1;
-      }
-    }
+    if (e.state !== 'dead') this.groundShadow(t, e.x, e.y, e.z);
     if (e.state === 'spawn') {
       const k = 1 - Math.max(0, e.t) / 0.9;
       ctx.fillStyle = SHOOTER;
@@ -458,6 +535,20 @@ export class Renderer {
     }
     const white = e.flash > 0 || (e.state === 'windup' && Math.floor(this.clock * 16) % 2 === 0);
     const mirror = e.dirX < 0;
+    // 어두운 테두리: 형광 등고선 위에서도 몸이 떨어져 보이게
+    const halo = e.kind === 'chaser' ? this.halo(`hound${mirror ? 1 : 0}`, (g, hx, hy) => drawHound(g, hx, hy, mirror, '#fff')) : this.halo('marker', (g, hx, hy) => drawMarker(g, hx, hy, '#fff', false));
+    const a0 = ctx.globalAlpha;
+    ctx.fillStyle = '#03040a';
+    ctx.globalAlpha = a0 * 0.9;
+    for (const [dx, dy] of halo) ctx.fillRect(x + dx, y + dy, 1, 1);
+    ctx.globalAlpha = a0;
+    if (e.kind === 'chaser' && e.state === 'windup') {
+      // 돌진 예고: 돌진할 길이 끝까지 차오르는 붉은 점선(다 차면 곧 돌진)
+      const k = Math.min(1, (1 - Math.max(0, e.t) / ENEMY.chaser.windup) * 1.25);
+      const len = ENEMY.chaser.lungeSpeed * ENEMY.chaser.lungeTime * k;
+      ctx.fillStyle = k >= 1 ? '#ffffff' : CHASER;
+      for (let d = 5; d < len; d += 3) ctx.fillRect(Math.round(e.x + e.dirX * d), sy(e.y + e.dirY * d, e.z) - 3, 1, 1);
+    }
     if (e.kind === 'chaser') {
       if (e.state === 'lunge') {
         const a = ctx.globalAlpha;
@@ -468,8 +559,8 @@ export class Renderer {
       drawHound(ctx, x, y, mirror, white ? '#ffffff' : CHASER);
     } else {
       if (e.state === 'windup') {
-        // 조준선: 점선
-        ctx.fillStyle = SHOOTER;
+        // 조준선: 점선. 발사 직전 0.2초는 경고 적색
+        ctx.fillStyle = e.t < 0.2 ? '#ff2d55' : SHOOTER;
         const dx = e.aimX - e.x;
         const dy = e.aimY - e.y;
         const d = Math.hypot(dx, dy) || 1;
@@ -497,6 +588,22 @@ export class Renderer {
         ctx.fillRect(x - max + k * 2, y - 13, 1, 1);
       }
     }
+    ctx.globalAlpha = 1;
+  }
+
+  /** 발밑 그림자: 서 있으면 납작한 타원, 높이 뜰수록 작고 옅게. 몸이 어느 땅 위에 있는지 보인다 */
+  private groundShadow(t: World['terrain'], px: number, py: number, z: number): void {
+    const gh = t.heightAt(px, py);
+    if (isAbyss(gh)) return;
+    const ctx = this.ctx;
+    const up = Math.max(0, z - gh);
+    const x = Math.round(px);
+    const y = sy(py, gh);
+    ctx.fillStyle = '#000000';
+    ctx.globalAlpha = up > 0.2 ? Math.max(0.25, 0.6 - up * 0.05) : 0.5;
+    const w = up > 3 ? 3 : up > 0.2 ? 5 : 7;
+    ctx.fillRect(x - (w >> 1), y - 1, w, 1);
+    ctx.fillRect(x - (w >> 1) + 1, y, w - 2, 1);
     ctx.globalAlpha = 1;
   }
 
@@ -535,6 +642,27 @@ export class Renderer {
     const p = world.player;
     const flip = p.facingX < 0;
     trace(Math.round(p.x), sy(p.y, p.z), rowOf(p.y), this.outline(`surveyor${flip ? 1 : 0}`, (g, x, y) => drawSurveyor(g, x, y, flip, '#fff', '#fff')), PLAYER_OUTLINE);
+  }
+
+  /** 스프라이트 바깥에 맞닿은 빈 픽셀(1px 바깥 테두리)을 구해 둔다 */
+  private halo(key: string, paint: (g: CanvasRenderingContext2D, x: number, y: number) => void): [number, number][] {
+    const hk = `halo:${key}`;
+    const cached = this.outlines.get(hk);
+    if (cached) return cached;
+    const { size, ox, oy } = MASK;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    paint(g, ox, oy);
+    const a = g.getImageData(0, 0, size, size).data;
+    const solid = (x: number, y: number) => x >= 0 && y >= 0 && x < size && y < size && a[(y * size + x) * 4 + 3] > 0;
+    const pts: [number, number][] = [];
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++)
+        if (!solid(x, y) && (solid(x + 1, y) || solid(x - 1, y) || solid(x, y + 1) || solid(x, y - 1))) pts.push([x - ox, y - oy]);
+    this.outlines.set(hk, pts);
+    return pts;
   }
 
   /** 스프라이트를 작은 캔버스에 한 번 그려, 채워진 픽셀 중 바깥과 맞닿은 것(1px 테두리)을 구해 둔다 */
@@ -578,12 +706,65 @@ export class Renderer {
     ctx.fillRect(x, y - 6, 1, 1);
   }
 
+  /** 타이틀: 4초마다 위에서 아래로 지나가는 시안 주사선과 옅은 잔상 */
+  private drawScan(): void {
+    const ctx = this.ctx;
+    const y = Math.round(((this.clock / 4) % 1) * (VIEW_H + 30)) - 10;
+    ctx.fillStyle = '#19f5c8';
+    for (let k = 0; k < 10; k++) {
+      ctx.globalAlpha = 0.16 * (1 - k / 10);
+      ctx.fillRect(0, y - k, VIEW_W, 1);
+    }
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(0, y, VIEW_W, 1);
+    ctx.globalAlpha = 1;
+  }
+
+  /** 구역 시작·재시작: 플레이어에서 퍼지는 측량 신호 고리 안쪽만 지도가 보인다(INTRO_SEC 동안) */
+  private drawIntro(world: World, dt: number): void {
+    if (this.introT >= INTRO_SEC) return;
+    // 연출 줄이기(흔들림·줌 모두 끔)면 퍼지는 고리 없이 바로 보인다
+    if (tune.shake === 0 && tune.zoomFx === 0) {
+      this.introT = INTRO_SEC;
+      return;
+    }
+    this.introT += dt;
+    const k = Math.min(1, this.introT / INTRO_SEC);
+    const e = 1 - (1 - k) ** 3;
+    const p = world.player;
+    const cx = p.x;
+    const cy = sy(p.y, p.z) - 6;
+    const r = Math.max(1, 8 + e * 560);
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, VIEW_W, VIEW_H);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#04050a';
+    ctx.fill('evenodd');
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#19f5c8';
+    ctx.globalAlpha = 1 - k * 0.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.35 * (1 - k);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1, r - 10), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   /** 구역이 바뀔 때 이전 구역의 연출을 지운다 */
   resetFx(): void {
     this.particles = [];
     this.slashes = [];
     this.rings = [];
     this.ghosts = [];
+    this.streaks = [];
+    this.marks = [];
+    this.beams = [];
+    this.introT = 0;
     this.shakeT = this.shakeAmp = this.shakeDur = 0;
     this.punch = this.punchT = this.dashOut = 0;
     this.hurtT = 0;
@@ -637,6 +818,46 @@ export class Renderer {
 
   private drawFx(dt: number): void {
     const ctx = this.ctx;
+    for (const m of this.marks) {
+      m.t += dt;
+      ctx.globalAlpha = Math.max(0, 0.8 * (1 - m.t / 1.4));
+      ctx.fillStyle = m.color;
+      for (let k = -2; k <= 2; k++) {
+        ctx.fillRect(m.x + k, m.y - 1 + k, 1, 1);
+        ctx.fillRect(m.x + k, m.y - 1 - k, 1, 1);
+      }
+    }
+    this.marks = this.marks.filter((m) => m.t < 1.4);
+    for (const b of this.beams) {
+      b.t += dt;
+      const k = 1 - b.t / 0.22;
+      if (k <= 0) continue;
+      ctx.globalAlpha = k;
+      ctx.fillStyle = '#bff7ff';
+      ctx.fillRect(b.x, b.y - 22, 1, 22);
+      ctx.globalAlpha = k * 0.4;
+      ctx.fillStyle = '#19f5c8';
+      ctx.fillRect(b.x - 1, b.y - 16, 3, 16);
+    }
+    this.beams = this.beams.filter((b) => b.t < 0.22);
+    for (const st of this.streaks) {
+      st.t += dt;
+      const k = st.t / st.max;
+      if (k >= 1) continue;
+      ctx.globalAlpha = 1 - k * 0.6;
+      ctx.fillStyle = st.color;
+      // 바깥으로 밀려 나가는 짧은 선들
+      const r0 = st.r0 + (st.r1 - st.r0) * k * 0.6;
+      const r1 = st.r0 + (st.r1 - st.r0) * Math.min(1, k * 1.6 + 0.3);
+      for (let q = 0; q < st.n; q++) {
+        const a = ((q + st.rot) / st.n) * Math.PI * 2;
+        const ca = Math.cos(a);
+        const sa = Math.sin(a) * 0.75;
+        for (let r = r0; r <= r1; r += 1) ctx.fillRect(Math.round(st.x + ca * r), Math.round(st.y + sa * r), 1, 1);
+      }
+    }
+    this.streaks = this.streaks.filter((st) => st.t < st.max);
+    ctx.globalAlpha = 1;
     for (const g of this.ghosts) g.t += dt;
     this.ghosts = this.ghosts.filter((g) => g.t < 0.15);
 
@@ -745,6 +966,14 @@ function drawMarker(ctx: CanvasRenderingContext2D, x: number, y: number, color: 
   ctx.fillRect(x, y - 6, 1, 1);
 }
 
+/** 두 #rrggbb 색을 t(0~1)만큼 섞는다 */
+function mix(a: string, b: string, t: number): string {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const ch = (s: number) => Math.round(((pa >> s) & 255) * (1 - t) + ((pb >> s) & 255) * t);
+  return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, '0')}`;
+}
+
 function pixLine(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number, color: string): void {
   ctx.fillStyle = color;
   const n = Math.max(1, Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
@@ -769,9 +998,12 @@ function makeBackground(): HTMLCanvasElement {
   const g = c.getContext('2d')!;
   g.fillStyle = '#04050a';
   g.fillRect(0, 0, VIEW_W, VIEW_H);
-  g.fillStyle = '#0a0d1a';
-  for (let x = 0; x < VIEW_W; x += 12) g.fillRect(x, 0, 1, VIEW_H);
-  for (let y = 0; y < VIEW_H; y += 12) g.fillRect(0, y, VIEW_W, 1);
+  // 지도 윗변 자: 5칸(30px)마다 큰 눈금, 1칸마다 작은 눈금 — 지면의 측량 눈금(+)과 열이 맞는다
+  g.fillStyle = '#121833';
+  g.fillRect(0, 13, VIEW_W, 1);
+  for (let x = 0; x < VIEW_W; x += 6) g.fillRect(x, 14, 1, x % 30 === 0 ? 3 : 1);
+  g.fillStyle = '#1d2750';
+  for (let x = 0; x < VIEW_W; x += 30) g.fillRect(x, 10, 1, 3);
   return c;
 }
 
