@@ -207,6 +207,28 @@ describe('구역 1 — 균열 지대(세 번의 측량)', () => {
     expect(shooter.z).toBe(4);
   });
 
+  it('다음 단계의 적이 설 자리 바로 옆(4칸 안)에 플레이어가 있으면 기다리고, 벗어나면 나타난다', () => {
+    const w = zoneWorld(0);
+    const st = newZoneState();
+    const p = w.player;
+    cutToward(w, 0, c(ZONE1_P1.cx), c(ZONE1_P1.cy), st);
+    run(w, 0, 1.2, emptyInput(), st);
+    // 측량 2의 서쪽 대지 돌진형 자리 바로 옆에 선다(준비)
+    p.x = c(ZONE1_P2.cx + 2);
+    p.y = c(ZONE1_P2.cy + 2);
+    run(w, 0, BEAT_GAP + 2, emptyInput(), st);
+    expect(st.pending).toBe(true);
+    expect(st.beat).toBe(0);
+    expect(w.enemies.filter((e) => e.state !== 'dead').length).toBe(0);
+    // 벗어나면 바로 다음 단계
+    p.x = c(40);
+    p.y = c(34);
+    run(w, 0, 0.1, emptyInput(), st);
+    expect(st.beat).toBe(1);
+    expect(st.pending).toBe(false);
+    expect(w.enemies.filter((e) => e.state !== 'dead').length).toBe(2);
+  });
+
   it('측량 평가: 전부 지형+무피해 S, 지형 80% 이상+피해 2 이하 A, 그 밖 B', () => {
     const base = { cuts: 0, airHits: 0, time: 0, airKills: 0 };
     expect(surveyGrade({ ...base, terrainKills: 6, bladeKills: 0, hurt: 0 }).grade).toBe('S');
