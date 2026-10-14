@@ -32,8 +32,14 @@ export const tune = {
   shockRadius: 28,
   shockStun: 1.2,
   shockKnock: 120,
-  hitstop: 0.05,
-  shake: 1,
+  hitstop: 0.05, // 일반 절단·타격 멈춤
+  hitstopStrong: 0.06, // 강한 착지·처치·공중 추가타 멈춤(30~60ms 권장). 일반 절단(0.05)보다 길어야 구분된다
+  shake: 1, // 화면 흔들림 배율(0 = 끔)
+  zoomFx: 1, // 카메라 줌 연출 배율(0 = 끔)
+  restoreLaunch: 15, // 지형 환원 때 적이 튕겨 오르는 초속(고도 단계/s). 체공 = 2v/g
+  airExposed: 0.4, // 착지 뒤에도 남는 무방비 시간
+  airStun: 0.4, // 환원 착지 뒤 기절
+  airHitDamage: 2, // 무방비 적에게 칼날 피해
 };
 
 export type Tune = typeof tune;

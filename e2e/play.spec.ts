@@ -122,6 +122,116 @@ test('이동 방해: 언덕 바깥 고리를 베면 꼭대기의 적이 구덩�
   expect(errors).toEqual([]);
 });
 
+test('핵심 루프: 측량 절단 → 고립 → 지형 환원(7초) → 에어본 → 공중 추가타', async ({ page }) => {
+  const errors = await openGame(page, 'combo');
+  // ① 측량 절단: 언덕 바깥 고리를 베어 꼭대기를 구덩이로
+  await cutAt(page, cellC(18), cellC(26));
+  await expect.poll(() => heightAt(page, 18, 26), { message: '꼭대기 침하' }).toBe(1);
+  // ② 다가간다(심연 가장자리에서 걸음이 멈춘다)
+  await page.keyboard.down('KeyA');
+  await page.waitForTimeout(1200);
+  await page.keyboard.up('KeyA');
+  const s1 = await snap(page);
+  expect(s1.player.hp).toBe(5);
+  const e0 = s1.enemies[0];
+  expect(e0.state).not.toBe('launched');
+  await aim(page, e0.x, e0.y);
+  // ③ 7초 환원 순간 적이 뜨기를 페이지 안에서 프레임 단위로 기다린다
+  const launchedAt = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const tick = () => {
+          const s = window.__cc.snapshot();
+          if (s.enemies[0]?.state === 'launched') return resolve(s.time);
+          requestAnimationFrame(tick);
+        };
+        tick();
+      }),
+  );
+  // ④ 무방비 동안 실제 클릭으로 추가타
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect.poll(async () => (await snap(page)).stats.airHits, { message: '공중 추가타' }).toBe(1);
+  const s2 = await snap(page);
+  expect(launchedAt, '환원은 절단 뒤 약 7초(게임 시간)').toBeGreaterThan(s2.tune.restoreSec - 0.5);
+  expect(s2.stats.launches).toBeGreaterThanOrEqual(1);
+  await expect(page.getByTestId('feed')).toContainText(/공중 (추가타|처치)/);
+  await shot(page, '11-combo-airhit');
+  expect(await hudGeometry(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('카메라: 고지대에서 대시로 뛰어내리면 미세하게 줌아웃했다가 돌아온다', async ({ page }) => {
+  const errors = await openGame(page, 'dash');
+  const samples = page.evaluate(
+    () =>
+      new Promise<number[]>((resolve) => {
+        const out: number[] = [];
+        const t0 = performance.now();
+        const tick = () => {
+          out.push(window.__cc.camera().zoom);
+          if (performance.now() - t0 < 1800) requestAnimationFrame(tick);
+          else resolve(out);
+        };
+        tick();
+      }),
+  );
+  await page.keyboard.down('KeyA');
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(220);
+  await shot(page, '12-dash-zoomout');
+  await page.keyboard.up('KeyA');
+  const z = await samples;
+  const min = Math.min(...z);
+  expect(min, '줌아웃').toBeLessThan(0.985);
+  expect(min, '미세(6% 이내)').toBeGreaterThan(0.93);
+  expect(Math.max(...z), '착지 순간 줌인도 4% 이내').toBeLessThan(1.05);
+  expect(Math.abs(z[z.length - 1] - 1), '원래대로').toBeLessThan(0.002);
+  expect(errors).toEqual([]);
+});
+
+test('접근성: 튜닝 패널의 "연출 줄이기"를 켜면 대시·충격파에도 줌·흔들림이 없다', async ({ page }) => {
+  const errors = await openGame(page, 'dash');
+  await page.keyboard.press('KeyT');
+  await expect(page.getByTestId('tune')).toBeVisible();
+  await page.getByTestId('reduce-motion').click();
+  await expect(page.getByTestId('reduce-motion')).toBeChecked();
+  await page.keyboard.press('KeyT');
+  await expect(page.getByTestId('tune')).toBeHidden();
+  const samples = page.evaluate(
+    () =>
+      new Promise<{ zoom: number; shake: number }[]>((resolve) => {
+        const out: { zoom: number; shake: number }[] = [];
+        const t0 = performance.now();
+        const tick = () => {
+          const c = window.__cc.camera();
+          out.push({ zoom: c.zoom, shake: Math.abs(c.shakeX) + Math.abs(c.shakeY) });
+          if (performance.now() - t0 < 1500) requestAnimationFrame(tick);
+          else resolve(out);
+        };
+        tick();
+      }),
+  );
+  await page.keyboard.down('KeyA');
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await snap(page)).stats.shocks).toBe(1);
+  await page.keyboard.up('KeyA');
+  const z = await samples;
+  expect(z.every((v) => v.zoom === 1), '줌 없음').toBe(true);
+  expect(z.every((v) => v.shake === 0), '흔들림 없음').toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('접근성: 운영체제의 동작 줄이기 설정이면 처음부터 흔들림·줌이 꺼져 있다', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openGame(page);
+  const s = await snap(page);
+  expect(s.tune.shake).toBe(0);
+  expect(s.tune.zoomFx).toBe(0);
+  await page.keyboard.press('KeyT');
+  await expect(page.getByTestId('reduce-motion')).toBeChecked();
+});
+
 test('지형 이동: 낭떠러지에서 대시로 뛰어내리면 멀리 활강하고 착지 충격파로 적을 기절시킨다', async ({ page }) => {
   const errors = await openGame(page, 'dash');
   const s0 = await snap(page);

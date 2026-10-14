@@ -22,7 +22,7 @@ export interface Setup {
 export const DEFAULT_SEED = 7;
 
 /** 시나리오 이름 목록. `?scenario=<이름>`. 검증 하네스와 사용자 실험 겸용 */
-export const SCENARIOS = ['lab', 'cut', 'fall', 'abyss', 'trap', 'dash', 'cover', 'exposed', 'highshot', 'swarm'] as const;
+export const SCENARIOS = ['lab', 'cut', 'fall', 'abyss', 'trap', 'dash', 'cover', 'exposed', 'highshot', 'combo', 'swarm'] as const;
 
 export function cellCenter(c: number): number {
   return (c + 0.5) * CELL;
@@ -138,6 +138,18 @@ export function buildSetup(name: string | null, seed: number): Setup {
       return { name, heights: labHeights(), player: { cx: 46, cy: 15 }, enemies: [{ kind: 'shooter', cx: 36, cy: 15 }], waves: false };
     case 'exposed':
       return { name, heights: labHeights(), player: { cx: 41, cy: 15 }, enemies: [{ kind: 'shooter', cx: 36, cy: 15 }], waves: false };
+    case 'combo':
+      // 핵심 루프 연습: 꼭대기 적(움직이지 않음)을 구덩이에 가두고 → 7초 환원 → 에어본 → 공중 추가타
+      return {
+        name,
+        heights: labHeights(),
+        player: { cx: 30, cy: 26 },
+        enemies: [
+          { kind: 'chaser', cx: 18, cy: 26, dormant: 60 },
+          { kind: 'chaser', cx: 17, cy: 24, dormant: 60 },
+        ],
+        waves: false,
+      };
     case 'highshot':
       // 메사 위(고도 4) 사격형이 아래 평지(고도 1)의 플레이어를 쏜다
       return { name, heights: labHeights(), player: { cx: 40, cy: 15 }, enemies: [{ kind: 'shooter', cx: 46, cy: 15 }], waves: false };

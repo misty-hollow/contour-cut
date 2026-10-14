@@ -9,6 +9,8 @@ export class Controls {
   private dashQueued = false;
   private dashAimQueued = false;
   onKey: (code: string) => void = () => {};
+  /** 화면 좌표 → 카메라 적용 전 화면 좌표(줌 역변환). 렌더러가 넣어 준다 */
+  toView: (x: number, y: number) => { x: number; y: number } = (x, y) => ({ x, y });
 
   constructor(private canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
@@ -41,8 +43,9 @@ export class Controls {
     input.moveX = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
     input.moveY = (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) - (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0);
     if (this.mouse) {
-      input.aimX = this.mouse.x;
-      input.aimY = this.mouse.y - ORIGIN_Y + player.z * LEVEL_PX;
+      const v = this.toView(this.mouse.x, this.mouse.y);
+      input.aimX = v.x;
+      input.aimY = v.y - ORIGIN_Y + player.z * LEVEL_PX;
     } else {
       input.aimX = player.x + 1;
       input.aimY = player.y;
