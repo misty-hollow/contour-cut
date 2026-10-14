@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Contour Cut — 등고선 절단기</title>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="game" aria-label="게임 화면"></canvas>
+      <div id="hud" aria-live="off">
+        <div id="hud-tl" class="hud-box">
+          <div id="hud-hp" data-testid="hud-hp"></div>
+          <div id="hud-wave" data-testid="hud-wave"></div>
+        </div>
+        <div id="hud-tr" class="hud-box" data-testid="hud-kills">
+          <div>지형 처치 <b id="k-terrain">0</b> · 칼날 <b id="k-blade">0</b></div>
+          <div class="sub">낙하 <span id="k-fall">0</span> · 심연 <span id="k-abyss">0</span> · 충격파 <span id="k-shock">0</span></div>
+        </div>
+        <div id="hud-bl" class="hud-box">
+          <div class="cool"><span>칼날</span><i><u id="cool-cut"></u></i></div>
+          <div class="cool"><span>대시</span><i><u id="cool-dash"></u></i></div>
+        </div>
+        <div id="hud-br" class="hud-box">H 조작 · T 튜닝 · M 소리</div>
+        <div id="feed" data-testid="feed"></div>
+      </div>
+      <div id="title" class="overlay" data-testid="title">
+        <h1>CONTOUR CUT</h1>
+        <h2>등고선 절단기</h2>
+        <p class="lead">지도의 등고선을 베어 땅을 무너뜨려라. 적을 베기보다 지형을 베는 편이 강하다.</p>
+        <button id="start" data-testid="start" type="button">클릭하여 측량 시작</button>
+        <p id="scenario-note" class="note"></p>
+      </div>
+      <div id="help" class="overlay panel hidden" data-testid="help">
+        <h3>조작</h3>
+        <dl>
+          <dt>WASD / 방향키</dt><dd>이동 (1단 턱은 오르고, 2단 이상 절벽은 못 오른다)</dd>
+          <dt>마우스 이동</dt><dd>조준 — 칼날이 벨 등고선이 십자로 표시된다</dd>
+          <dt>왼쪽 클릭 / J</dt><dd>등고선 절단: 벤 선 안쪽 고지대가 내려앉는다</dd>
+          <dt>Space / Shift / K</dt><dd>대시(이동 방향, 없으면 조준 방향) · 무적</dd>
+          <dt>오른쪽 클릭</dt><dd>조준 방향으로 대시</dd>
+          <dt>R · N</dt><dd>다시 시작 · 새 지도</dd>
+          <dt>P / Esc</dt><dd>일시정지</dd>
+          <dt>H · T · M</dt><dd>이 도움말 · 튜닝 패널 · 소리 끄기</dd>
+        </dl>
+        <h3>규칙</h3>
+        <ul>
+          <li>벤 등고선 안쪽 고지대(반경 <b data-tune="cutRadius">6</b>칸)는 <b data-tune="cutDrop">3</b>단 내려앉는다. 고도 <b data-tune-abyss>2</b> 이하였던 땅은 <b>심연</b>이 되어 위의 적이 추락한다.</li>
+          <li>높은 곳에서 떨어진 적은 피해를 입고 기절한다. 2단 이상 절벽은 적의 길을 막는다.</li>
+          <li>2단 이상 뛰어내려 착지하면 <b>충격파</b>로 주변 적을 기절시키고 밀쳐 낸다. 내리막을 타면 빨라진다.</li>
+          <li>사격형의 탄은 쏜 자리보다 높은 지형에 막힌다. 높은 곳으로 숨어라.</li>
+          <li>무너진 땅은 <b data-tune="restoreSec">7</b>초 뒤 원래대로 돌아온다(직전에 깜빡인다).</li>
+        </ul>
+      </div>
+      <div id="tune" class="overlay panel hidden" data-testid="tune"></div>
+      <div id="pause" class="overlay hidden" data-testid="pause"><h2>일시정지</h2><p>P 또는 Esc로 계속</p></div>
+      <div id="over" class="overlay hidden" data-testid="over">
+        <h2>측량 중단</h2>
+        <p id="over-stats"></p>
+        <p class="note">R 다시 시작 · N 새 지도</p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
