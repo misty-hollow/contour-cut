@@ -22,7 +22,7 @@ export interface Setup {
 export const DEFAULT_SEED = 7;
 
 /** 시나리오 이름 목록. `?scenario=<이름>`. 검증 하네스와 사용자 실험 겸용 */
-export const SCENARIOS = ['lab', 'cut', 'fall', 'abyss', 'trap', 'dash', 'cover', 'exposed', 'swarm'] as const;
+export const SCENARIOS = ['lab', 'cut', 'fall', 'abyss', 'trap', 'dash', 'cover', 'exposed', 'highshot', 'swarm'] as const;
 
 export function cellCenter(c: number): number {
   return (c + 0.5) * CELL;
@@ -138,6 +138,9 @@ export function buildSetup(name: string | null, seed: number): Setup {
       return { name, heights: labHeights(), player: { cx: 46, cy: 15 }, enemies: [{ kind: 'shooter', cx: 36, cy: 15 }], waves: false };
     case 'exposed':
       return { name, heights: labHeights(), player: { cx: 41, cy: 15 }, enemies: [{ kind: 'shooter', cx: 36, cy: 15 }], waves: false };
+    case 'highshot':
+      // 메사 위(고도 4) 사격형이 아래 평지(고도 1)의 플레이어를 쏜다
+      return { name, heights: labHeights(), player: { cx: 40, cy: 15 }, enemies: [{ kind: 'shooter', cx: 46, cy: 15 }], waves: false };
     case 'swarm': {
       const enemies: EnemySpec[] = [];
       for (let k = 0; k < 8; k++) {

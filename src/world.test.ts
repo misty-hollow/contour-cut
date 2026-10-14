@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CELL, FIXED_DT, tune } from './config';
-import { emptyInput, World, type Input } from './world';
+import { boltHitsBody, emptyInput, World, type Input } from './world';
 
 const c = (n: number) => (n + 0.5) * CELL;
 
@@ -119,6 +119,29 @@ describe('지형 이동', () => {
     run(w, 4);
     expect(w.player.hp).toBe(5);
     expect(w.stats.boltsBlocked).toBeGreaterThan(0);
+  });
+
+  it('탄 피격은 몸의 수직 구간과 겹칠 때만: 머리 위·발밑을 지나는 탄은 맞지 않는다', () => {
+    expect(boltHitsBody(1.5, 1)).toBe(true);
+    expect(boltHitsBody(4.5, 1)).toBe(false); // 머리 위
+    expect(boltHitsBody(1.5, 4)).toBe(false); // 발밑
+  });
+
+  it('높은 곳의 사격형은 고지대를 벗어난 뒤 내려가는 탄으로 아래 표적을 맞힌다', () => {
+    const w = new World('highshot', 1);
+    expect(w.enemies[0].z).toBe(4);
+    expect(w.player.z).toBe(1);
+    run(w, 3);
+    expect(w.player.hp).toBeLessThan(5);
+  });
+
+  it('높게 날아가는 탄이 낮은 플레이어 머리 위를 지나가면 맞지 않는다', () => {
+    const w = new World('cut', 1);
+    const p = w.player;
+    // 고도 4.5로 수평 비행하는 탄(표적 고도도 4.5)이 플레이어 위치를 가로지른다
+    w.bolts.push({ x: p.x + 20, y: p.y, vx: -110, vy: 0, alt: 4.5, launchAlt: 4.5, targetAlt: 4.5, aimX: p.x - 60, aimY: p.y, life: 3 });
+    run(w, 0.6);
+    expect(p.hp).toBe(5);
   });
 
   it('같은 높이에 서 있으면 탄에 맞는다', () => {

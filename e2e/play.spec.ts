@@ -153,6 +153,38 @@ test('회피: 사격형의 탄은 높은 지형에 막히고, 같은 높이에�
   expect(errors).toEqual([]);
 });
 
+test('회피: 높은 곳의 사격형 탄은 내려와서 맞고, 맞는 순간 화면의 탄은 플레이어 몸에 겹쳐 있다', async ({ page }) => {
+  const errors = await openGame(page, 'highshot');
+  // 프레임마다 탄과 플레이어의 화면 위치(내부 픽셀)를 기록하다가 체력이 줄면 멈춘다
+  const gap = await page.evaluate(
+    () =>
+      new Promise<{ dx: number; dy: number } | null>((resolve) => {
+        const r = (document.getElementById('game') as HTMLCanvasElement).getBoundingClientRect();
+        const k = 480 / r.width;
+        let last: { dx: number; dy: number } | null = null;
+        const t0 = performance.now();
+        const tick = () => {
+          const s = window.__cc.snapshot();
+          if (s.player.hp < 5) return resolve(last);
+          if (performance.now() - t0 > 6000) return resolve(null);
+          const b = s.bolts[0];
+          if (b) {
+            const pb = window.__cc.project(b.x, b.y, b.alt);
+            // 플레이어 몸 중심: 발끝에서 6px 위
+            const pp = window.__cc.project(s.player.x, s.player.y, s.player.z);
+            last = { dx: (pb.x - pp.x) * k, dy: (pb.y - pp.y) * k + 6 };
+          }
+          requestAnimationFrame(tick);
+        };
+        tick();
+      }),
+  );
+  expect(gap, '피격 발생').not.toBeNull();
+  expect(Math.abs(gap!.dx), '가로 거리(px)').toBeLessThan(8);
+  expect(Math.abs(gap!.dy), '세로 거리(px): 머리 위를 지나는 탄이 아님').toBeLessThan(8);
+  expect(errors).toEqual([]);
+});
+
 test('게임 오버 → R로 다시 시작', async ({ page }) => {
   const errors = await openGame(page, 'swarm');
   await expect.poll(async () => (await snap(page)).mode, { timeout: 25_000, message: '게임 오버' }).toBe('over');

@@ -78,6 +78,7 @@ export interface Enemy extends Body {
   dirY: number;
   aimX: number;
   aimY: number;
+  aimZ: number;
   knockX: number;
   knockY: number;
   knockT: number;
@@ -91,8 +92,20 @@ export interface Bolt {
   y: number;
   vx: number;
   vy: number;
+  /** 현재 탄의 고도. 그리기와 충돌이 같은 값을 쓴다 */
   alt: number;
+  /** 쏜 자리의 고도 + 0.5. 탄은 이보다 위로 올라가지 않는다 */
+  launchAlt: number;
+  /** 조준한 표적의 고도 + 0.5(쏜 자리보다 높으면 launchAlt) */
+  targetAlt: number;
+  aimX: number;
+  aimY: number;
   life: number;
+}
+
+/** 탄 고도가 몸의 수직 구간 [z-0.25, z+1.75] 안에 있을 때만 맞는다(머리 위·발밑을 지나가는 탄은 맞지 않음) */
+export function boltHitsBody(alt: number, z: number): boolean {
+  return alt >= z - 0.25 && alt <= z + 1.75;
 }
 
 export interface Stats {
@@ -151,7 +164,7 @@ export class World {
       id: this.nextId++, kind, x, y, z, vz: 0, peakZ: z, airborne: false,
       hp: ENEMY[kind].hp, state: portal ? 'spawn' : 'walk', t: portal ? 0.9 : 0,
       cool: kind === 'shooter' ? ENEMY.shooter.firstShot : 0.5,
-      dormant, dirX: 0, dirY: 0, aimX: 0, aimY: 0, knockX: 0, knockY: 0, knockT: 0, flash: 0, deadT: 0,
+      dormant, dirX: 0, dirY: 0, aimX: 0, aimY: 0, aimZ: 0, knockX: 0, knockY: 0, knockT: 0, flash: 0, deadT: 0,
     };
     this.enemies.push(e);
     if (portal) this.events.push({ type: 'spawn', x, y });
@@ -524,6 +537,7 @@ export class World {
         e.t = ENEMY.shooter.windup;
         e.aimX = p.x;
         e.aimY = p.y;
+        e.aimZ = p.z;
         return;
       }
       if (dist > ENEMY.shooter.range * 0.8) this.walkToward(e, ENEMY.shooter.speed, dt);
@@ -565,8 +579,14 @@ export class World {
     const dy = e.aimY - e.y;
     const d = Math.hypot(dx, dy) || 1;
     const s = ENEMY.shooter.boltSpeed;
-    // 탄의 높이 = 쏜 적의 고도 + 0.5. 그보다 높은 지형에 닿으면 막힌다
-    this.bolts.push({ x: e.x, y: e.y, vx: (dx / d) * s, vy: (dy / d) * s, alt: e.z + 0.5, life: ENEMY.shooter.boltLife });
+    // 탄은 쏜 적의 고도 + 0.5에서 출발한다. 표적이 더 낮으면 고지대를 벗어난 뒤 조준점 고도까지 내려가고,
+    // 더 높으면 그대로 날아가 그보다 높은 지형에 막힌다(위로는 올라가지 않음)
+    const launchAlt = e.z + 0.5;
+    this.bolts.push({
+      x: e.x, y: e.y, vx: (dx / d) * s, vy: (dy / d) * s,
+      alt: launchAlt, launchAlt, targetAlt: Math.min(launchAlt, e.aimZ + 0.5),
+      aimX: e.aimX, aimY: e.aimY, life: ENEMY.shooter.boltLife,
+    });
     this.events.push({ type: 'fire', x: e.x, y: e.y, z: e.z });
   }
 
@@ -597,12 +617,19 @@ export class World {
       b.y += b.vy * dt;
       const h = t.heightAt(b.x, b.y);
       if (b.life <= 0) continue;
+      // 쏜 고지대를 벗어나 더 낮은 땅 위에 오면 조준점에 닿을 때 표적 고도가 되도록 내려간다
+      if (b.alt > b.targetAlt && h < b.launchAlt - 0.5) {
+        const speed = Math.hypot(b.vx, b.vy);
+        const rem = ((b.aimX - b.x) * b.vx + (b.aimY - b.y) * b.vy) / (speed || 1);
+        const step = speed * dt;
+        b.alt = rem <= step ? b.targetAlt : b.alt - (b.alt - b.targetAlt) * (step / rem);
+      }
       if (h > 50 || h > b.alt) {
         this.stats.boltsBlocked++;
         this.events.push({ type: 'boltBlocked', x: b.x, y: b.y, z: Math.min(b.alt, 6) });
         continue;
       }
-      if (Math.hypot(p.x - b.x, p.y - b.y) < 5 && p.z <= b.alt + 0.5 && p.inv === 0) {
+      if (Math.hypot(p.x - b.x, p.y - b.y) < 5 && boltHitsBody(b.alt, p.z) && p.inv === 0) {
         this.damagePlayer(b.x, b.y, PLAYER.hurtInv);
         continue;
       }
@@ -710,7 +737,7 @@ export class World {
       scenario: this.setup.name,
       player: { x: p.x, y: p.y, z: p.z, hp: p.hp, airborne: p.airborne, dashing: p.dashT > 0, inv: p.inv, boost: p.boost },
       enemies: this.enemies.map((e) => ({ id: e.id, kind: e.kind, x: e.x, y: e.y, z: e.z, hp: e.hp, state: e.state, airborne: e.airborne, cause: e.deathCause ?? null })),
-      bolts: this.bolts.length,
+      bolts: this.bolts.map((b) => ({ x: b.x, y: b.y, alt: b.alt })),
       stats: structuredClone(this.stats),
     };
   }
