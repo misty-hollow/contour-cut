@@ -66,9 +66,12 @@ export async function hudGeometry(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const problems: string[] = [];
     const stage = document.getElementById('stage')!.getBoundingClientRect();
-    // 첫 여정 힌트 줄은 보일 때만 함께 검사한다
+    // 구역 블록(첫 여정)과 웨이브 줄(무한 웨이브·실험)은 둘 중 하나만 보인다. 힌트 줄은 보일 때만 함께 검사한다
+    const shown = (id: string) => !document.getElementById(id)!.classList.contains('hidden');
     const hint = document.getElementById('hint');
-    const ids = ['hud-tl', 'hud-tr', 'hud-bl', 'hud-br', ...(hint && !hint.classList.contains('hidden') ? ['hint'] : [])];
+    const top = ['hud-tl', 'hud-tr'].filter(shown);
+    if (top.length !== 1) problems.push(`좌상단 구역 블록·우상단 웨이브 줄 중 ${top.length}개 보임`);
+    const ids = [...top, 'hud-bl', 'hud-br', ...(hint && shown('hint') ? ['hint'] : [])];
     const rects = ids.map((id) => [id, document.getElementById(id)!.getBoundingClientRect()] as const);
     for (const [id, r] of rects) {
       if (r.width === 0 || r.height === 0) problems.push(`${id} 크기 0`);
@@ -86,11 +89,15 @@ export async function hudGeometry(page: Page): Promise<string[]> {
       const el = document.getElementById(id)!;
       if (el.scrollWidth > el.clientWidth + 1) problems.push(`${id} 가로 넘침`);
     }
-    // 힌트 줄은 한 줄이어야 한다(두 줄로 꺾이면 끝 글자만 다음 줄로 넘어가 아래 HUD·지형을 가린다)
+    // 힌트 줄은 두 줄까지(UI System 01). 두 줄이면 끝 몇 글자만 다음 줄로 넘어간 고아 줄이 아니어야 한다
     if (ids.includes('hint')) {
-      const cs = getComputedStyle(hint!);
-      const lines = (hint!.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) / parseFloat(cs.lineHeight);
-      if (lines > 1.5) problems.push(`hint ${Math.round(lines)}줄`);
+      const range = document.createRange();
+      range.selectNodeContents(hint!);
+      const lines = new Map<number, number>();
+      for (const r of Array.from(range.getClientRects())) lines.set(Math.round(r.top), (lines.get(Math.round(r.top)) ?? 0) + r.width);
+      const widths = [...lines.values()];
+      if (widths.length > 2) problems.push(`hint ${widths.length}줄`);
+      else if (widths.length === 2 && Math.min(...widths) < 0.25 * Math.max(...widths)) problems.push('hint 고아 줄');
     }
     return problems;
   });

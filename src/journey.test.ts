@@ -569,6 +569,41 @@ describe('구역 3 — 환원 구역', () => {
   });
 });
 
+describe('HUD 구역 블록 필드(UI System 01)', () => {
+  it('단계형: 목표·수치·진행 눈금이 단계와 준비 상태를 따른다, 기존 label은 "목표 · 수치" 그대로', () => {
+    const w = zoneWorld(0);
+    const st = newZoneState();
+    let s0 = zoneStatus(ZONES[0], w, st);
+    expect(s0).toMatchObject({ goal: '측량 1/3 첫 측량', count: '적 0/1', countDone: false, pips: { done: 0, total: 3 } });
+    expect(s0.label).toBe(`${s0.goal} · ${s0.count}`);
+    cutToward(w, 0, c(ZONE1_P1.cx), c(ZONE1_P1.cy), st);
+    run(w, 0, 1.2, emptyInput(), st);
+    s0 = zoneStatus(ZONES[0], w, st);
+    expect(s0).toMatchObject({ goal: '측량 2/3 포대', count: '준비', countDone: false, pips: { done: 1, total: 3 } });
+    expect(s0.label).toBe('측량 2/3 포대 · 준비');
+  });
+
+  it('돌파형: 지금 구간이 목표, 수치는 "출구 돌파", 눈금은 지난 구간 수 — 출구에 서면 달성', () => {
+    const w = zoneWorld(1);
+    expect(zoneStatus(ZONES[1], w)).toMatchObject({ goal: '구간 1/3 단애', count: '출구 돌파', countDone: false, pips: { done: 0, total: 3 } });
+    w.player.x = c(52);
+    expect(zoneStatus(ZONES[1], w).pips.done).toBe(2);
+    w.player.x = c(ZONE2_EXIT.cx);
+    w.player.y = c(ZONE2_EXIT.cy);
+    expect(zoneStatus(ZONES[1], w)).toMatchObject({ done: true, countDone: true, pips: { done: 3, total: 3 } });
+  });
+
+  it('마지막 단계의 적을 모두 쓰러뜨리면 수치 달성·눈금 전부 완료', () => {
+    const w = zoneWorld(2);
+    const st = newZoneState();
+    for (let beat = 0; beat < 3; beat++) {
+      for (const e of w.enemies) e.state = 'dead';
+      run(w, 2, BEAT_GAP + 0.2, emptyInput(), st);
+    }
+    expect(zoneStatus(ZONES[2], w, st)).toMatchObject({ done: true, countDone: true, count: '적 6/6', pips: { done: 3, total: 3 } });
+  });
+});
+
 describe('구역 번호 주소(?zone=N)', () => {
   it('1~3 정수만 받고, 소수·0·범위 밖·문자·빈 값은 구역 1(리뷰 재현: 1.5·2.5)', () => {
     expect(parseZoneParam('1')).toBe(0);

@@ -1,4 +1,5 @@
 import { CELL, ENEMY, GRID_H, GRID_W, VIEW_H, VIEW_W, screenY, tune } from './config';
+import { terrainCoversAfterRow } from './input';
 import { isAbyss } from './terrain';
 import type { Enemy, GameEvent, World } from './world';
 
@@ -19,6 +20,10 @@ const ABYSS_RIM = '#ff2d55';
 const RIM = '#dffcff';
 const CHASER = '#ff3b3b';
 const SHOOTER = '#c04cff';
+/** 지형에 가려진 플레이어 윤곽 색(측량 신호 시안) */
+const PLAYER_OUTLINE = '#19f5c8';
+/** 윤곽 마스크를 구할 때 스프라이트를 그리는 작은 캔버스(발끝 기준점) */
+const MASK = { size: 32, ox: 16, oy: 24 };
 
 interface Particle {
   x: number;
@@ -86,6 +91,8 @@ export class Renderer {
   private punchT = 0;
   private dashOut = 0;
   readonly cam: CameraState = { zoom: 1, fx: VIEW_W / 2, fy: VIEW_H / 2, shakeX: 0, shakeY: 0 };
+  /** 스프라이트 종류별 1px 테두리 픽셀(발끝 기준 상대 좌표) */
+  private outlines = new Map<string, [number, number][]>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.display = canvas;
@@ -245,6 +252,7 @@ export class Renderer {
       for (let cx = 0; cx < GRID_W; cx++) this.drawCell(world, cx, cy);
       for (const f of rows[cy]) f();
     }
+    this.drawOccluded(world, rowOf);
 
     if (world.setup.exit) this.drawBeacon(world, world.setup.exit, '#e8ff3a');
     if (world.marker) this.drawBeacon(world, world.marker, '#19f5c8');
@@ -502,6 +510,51 @@ export class Renderer {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(x - 1, y - 1, 2, 2);
     }
+  }
+
+  /**
+   * 2.5D 가림 보완: 남쪽(앞쪽) 높은 지형에 가려진 적·플레이어는, 지형이 덮은 픽셀에만 1px 윤곽을 그린다.
+   * 가림 판정은 조준(input.ts terrainCoversAfterRow)과 같은 함수다. 표시만 바꾸고 판정·조준은 그대로.
+   */
+  private drawOccluded(world: World, rowOf: (y: number) => number): void {
+    const ctx = this.ctx;
+    const t = world.terrain;
+    const trace = (x: number, y: number, row: number, pts: [number, number][], color: string) => {
+      ctx.fillStyle = color;
+      for (const [dx, dy] of pts) if (terrainCoversAfterRow(t, x + dx, y + dy, row)) ctx.fillRect(x + dx, y + dy, 1, 1);
+    };
+    for (const e of world.enemies) {
+      if (e.state === 'dead' || e.state === 'spawn') continue;
+      const mirror = e.dirX < 0;
+      const pts =
+        e.kind === 'chaser'
+          ? this.outline(`hound${mirror ? 1 : 0}`, (g, x, y) => drawHound(g, x, y, mirror, '#fff'))
+          : this.outline('marker', (g, x, y) => drawMarker(g, x, y, '#fff', false));
+      trace(Math.round(e.x), sy(e.y, e.z), rowOf(e.y), pts, e.kind === 'chaser' ? CHASER : SHOOTER);
+    }
+    const p = world.player;
+    const flip = p.facingX < 0;
+    trace(Math.round(p.x), sy(p.y, p.z), rowOf(p.y), this.outline(`surveyor${flip ? 1 : 0}`, (g, x, y) => drawSurveyor(g, x, y, flip, '#fff', '#fff')), PLAYER_OUTLINE);
+  }
+
+  /** 스프라이트를 작은 캔버스에 한 번 그려, 채워진 픽셀 중 바깥과 맞닿은 것(1px 테두리)을 구해 둔다 */
+  private outline(key: string, paint: (g: CanvasRenderingContext2D, x: number, y: number) => void): [number, number][] {
+    const cached = this.outlines.get(key);
+    if (cached) return cached;
+    const { size, ox, oy } = MASK;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    paint(g, ox, oy);
+    const a = g.getImageData(0, 0, size, size).data;
+    const solid = (x: number, y: number) => x >= 0 && y >= 0 && x < size && y < size && a[(y * size + x) * 4 + 3] > 0;
+    const pts: [number, number][] = [];
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++)
+        if (solid(x, y) && (!solid(x + 1, y) || !solid(x - 1, y) || !solid(x, y + 1) || !solid(x, y - 1))) pts.push([x - ox, y - oy]);
+    this.outlines.set(key, pts);
+    return pts;
   }
 
   /** 표지(출구·안내): 바닥에 퍼지는 측량 고리 + 위로 솟는 빛기둥과 삼각점 */

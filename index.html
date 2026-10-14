@@ -9,20 +9,24 @@
     <div id="stage">
       <canvas id="game" aria-label="게임 화면"></canvas>
       <div id="hud" aria-live="off">
-        <div id="hud-tl" class="hud-box">
-          <div id="hud-hp" data-testid="hud-hp"></div>
-          <div id="hud-wave" data-testid="hud-wave"></div>
-          <div id="hud-goal" data-testid="hud-goal"></div>
+        <!-- 구역 블록(첫 여정): 구역 · 지금 단계와 목표 수치 · 진행 눈금 -->
+        <div id="hud-tl" class="hud-box" data-testid="hud-zone">
+          <div class="zb-row"><span id="hud-zone-tag" class="zb-tag">Z01</span><b id="hud-zone-name" class="zb-name"></b><span id="hud-zone-no" class="zb-no"></span></div>
+          <div class="zb-row zb-goal"><span id="hud-goal" data-testid="hud-goal"></span><b id="hud-count" data-testid="hud-count"></b></div>
+          <div id="hud-pips" class="zb-pips" data-testid="hud-pips"></div>
         </div>
-        <div id="hud-tr" class="hud-box" data-testid="hud-kills">
-          <div>지형 처치 <b id="k-terrain">0</b> · 공중 <b id="k-air">0</b> · 칼날 <b id="k-blade">0</b></div>
-          <div class="sub">낙하 <span id="k-fall">0</span> · 절대 심연 <span id="k-abyss">0</span> · 충격파 <span id="k-shock">0</span> · 에어본 <span id="k-launch">0</span></div>
+        <!-- 무한 웨이브·실험 시나리오: 한 줄 -->
+        <div id="hud-tr" class="hud-box hidden" data-testid="hud-wave"></div>
+        <!-- 계기 묶음: 체력 · 절단 · 대시 -->
+        <div id="hud-bl" class="hud-box" data-testid="hud-gauges">
+          <span id="lbl-hp" class="g-label">체력</span>
+          <div id="hud-hp" class="g-hp" data-testid="hud-hp"></div>
+          <span id="lbl-cut" class="g-label">절단</span>
+          <div class="g-row"><div id="track-cut" class="g-track g-cut"><u id="cool-cut"></u><i></i><i></i><i></i></div><b id="lamp-cut" class="g-lamp g-sq"></b></div>
+          <span id="lbl-dash" class="g-label">대시</span>
+          <div class="g-row"><div id="track-dash" class="g-track g-dash"><u id="cool-dash"></u></div><b id="lamp-dash" class="g-lamp g-dia"></b></div>
         </div>
-        <div id="hud-bl" class="hud-box">
-          <div class="cool"><span>절단</span><i><u id="cool-cut"></u></i></div>
-          <div class="cool"><span>대시</span><i><u id="cool-dash"></u></i></div>
-        </div>
-        <div id="hud-br" class="hud-box">H 조작 · T 튜닝 · M 소리</div>
+        <div id="hud-br">H 조작 · T 튜닝 · M 소리</div>
         <div id="feed" data-testid="feed"></div>
         <div id="zone-banner" class="hidden" data-testid="zone-banner"></div>
         <div id="hint" class="hud-box hidden" data-testid="hint"></div>
