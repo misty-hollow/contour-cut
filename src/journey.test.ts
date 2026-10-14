@@ -513,6 +513,37 @@ describe('구역 3 — 환원 구역', () => {
     }
   });
 
+  it('거리와 지형이 함께 막으면(재검토 제안): 물러나라 안내 → 출발점으로 가면 안내는 사라지고 지형 환원 뒤 시작(무기한 대기 없음)', () => {
+    const w = zoneWorld(2);
+    const st = newZoneState();
+    const p = w.player;
+    for (const e of w.enemies) e.state = 'dead';
+    run(w, 2, BEAT_GAP + 0.2, emptyInput(), st);
+    expect(st.beat).toBe(1);
+    // 대환원 사격형 자리(서쪽 언덕)를 베어 두고, 대환원 돌진형 출현 지점(3,36) 옆에서 환원대 단계를 끝낸다
+    const hill = ZONE3_HILLS[1];
+    p.x = c(hill.cx + 9);
+    p.y = c(hill.cy);
+    cutToward(w, 2, c(hill.cx), c(hill.cy), st);
+    const cutAt = w.time;
+    p.x = c(3);
+    p.y = c(35);
+    for (const e of w.enemies) e.state = 'dead';
+    run(w, 2, BEAT_GAP + 0.5, emptyInput(), st);
+    expect(zoneStatus(restore, w, st).hint).toContain('물러나');
+    // 출발점으로 물러나면 거리 조건은 풀리고, 남은 것은 지형 환원 대기(안내·표지 없음)
+    p.x = c(w.setup.player.cx);
+    p.y = c(w.setup.player.cy);
+    run(w, 2, 0.1, emptyInput(), st);
+    expect(st.pending).toBe(true);
+    const terrainWait = zoneStatus(restore, w, st);
+    expect(terrainWait.hint).not.toContain('물러나');
+    expect(terrainWait.marker).toBeUndefined();
+    // 절단 7초 뒤 환원되면 시작
+    run(w, 2, cutAt + tune.restoreSec + 0.2 - w.time, emptyInput(), st);
+    expect(st.beat).toBe(2);
+  });
+
   it('거리 조건이 아닌 대기(숨 고르기·지형 환원 대기)에는 물러나라 안내를 띄우지 않는다', () => {
     const w = zoneWorld(2);
     const st = newZoneState();

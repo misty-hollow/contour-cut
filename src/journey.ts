@@ -381,7 +381,7 @@ export function zoneStatus(zone: Zone, world: World, st: ZoneState = newZoneStat
         // 다음 단계 준비 중: 다음 단계 이름과 어디로 가야 하는지
         const next = beats[st.beat + 1];
         const label = `${word} ${st.beat + 2}/${beats.length} ${next.name} · 준비`;
-        // 숨 고르기가 끝났는데 플레이어가 출현 지점 바로 옆이라서만 기다리는 중이면, 물러날 곳(출발점)을 알린다
+        // 숨 고르기가 끝났는데 플레이어가 출현 지점 4칸 안이라서 기다리는 중이면(지형 환원 대기가 겹쳐도) 물러날 곳(출발점)을 알린다
         if (st.wait <= 0 && beatBlock(world, next) === 'near') {
           const sp = world.setup.player;
           return { done: false, label, hint: '적이 나타날 자리 바로 옆이다 — 청록 표지 쪽으로 물러나면 다음 단계가 시작된다', marker: { cx: sp.cx, cy: sp.cy, r: 2 } };
