@@ -18,7 +18,8 @@ export interface Input {
 
 export const emptyInput = (): Input => ({ moveX: 0, moveY: 0, aimX: 0, aimY: 0, cut: false, dash: false, dashToAim: false });
 
-export type KillCause = 'fall' | 'abyss' | 'blade';
+/** fall·abyss = 지형 처치, air = 지형 환원으로 띄운 적을 벤 처치, blade = 칼날 직접 처치 */
+export type KillCause = 'fall' | 'abyss' | 'blade' | 'air';
 
 export type GameEvent =
   | { type: 'slash'; x0: number; y0: number; x1: number; y1: number; z: number; crossings: { x: number; y: number; level: number }[]; cells: number[] }
@@ -31,6 +32,8 @@ export type GameEvent =
   | { type: 'boltBlocked'; x: number; y: number; z: number }
   | { type: 'fire'; x: number; y: number; z: number }
   | { type: 'restore'; cells: number[] }
+  | { type: 'launch'; x: number; y: number; z: number }
+  | { type: 'airHit'; x: number; y: number; z: number }
   | { type: 'dash'; x: number; y: number }
   | { type: 'spawn'; x: number; y: number }
   | { type: 'wave'; wave: number };
@@ -64,7 +67,8 @@ export interface Player extends Body {
   dashed: boolean;
 }
 
-export type EnemyState = 'spawn' | 'walk' | 'windup' | 'lunge' | 'recover' | 'stun' | 'dead';
+/** launched = 지형 환원으로 튕겨 올라 공중에 있는 상태(행동 불가) */
+export type EnemyState = 'spawn' | 'walk' | 'windup' | 'lunge' | 'recover' | 'stun' | 'launched' | 'dead';
 
 export interface Enemy extends Body {
   id: number;
@@ -85,6 +89,12 @@ export interface Enemy extends Body {
   flash: number;
   deadT: number;
   deathCause?: KillCause;
+  /** 무방비 시간: 이 동안 칼날에 맞으면 공중 추가타 */
+  exposedT: number;
+  /** 튕겨 오른 자리의 지면 고도(착지 낙하 피해 계산) */
+  launchGround: number;
+  /** 공중에서 받은 기절. 착지하면 적용 */
+  postStun: number;
 }
 
 export interface Bolt {
@@ -116,6 +126,10 @@ export interface Stats {
   boltsBlocked: number;
   hurt: number;
   wave: number;
+  /** 지형 환원으로 띄운 횟수 */
+  launches: number;
+  /** 무방비 상태의 적에게 넣은 공중 추가타 */
+  airHits: number;
 }
 
 export type Mode = 'play' | 'over';
@@ -131,7 +145,7 @@ export class World {
   enemies: Enemy[] = [];
   bolts: Bolt[] = [];
   events: GameEvent[] = [];
-  stats: Stats = { kills: { fall: 0, abyss: 0, blade: 0 }, cuts: 0, cellsCollapsed: 0, shocks: 0, boltsBlocked: 0, hurt: 0, wave: 0 };
+  stats: Stats = { kills: { fall: 0, abyss: 0, blade: 0, air: 0 }, cuts: 0, cellsCollapsed: 0, shocks: 0, boltsBlocked: 0, hurt: 0, wave: 0, launches: 0, airHits: 0 };
   mode: Mode = 'play';
   time = 0;
   hitstop = 0;
@@ -165,6 +179,7 @@ export class World {
       hp: ENEMY[kind].hp, state: portal ? 'spawn' : 'walk', t: portal ? 0.9 : 0,
       cool: kind === 'shooter' ? ENEMY.shooter.firstShot : 0.5,
       dormant, dirX: 0, dirY: 0, aimX: 0, aimY: 0, aimZ: 0, knockX: 0, knockY: 0, knockT: 0, flash: 0, deadT: 0,
+      exposedT: 0, launchGround: z, postStun: 0,
     };
     this.enemies.push(e);
     if (portal) this.events.push({ type: 'spawn', x, y });
@@ -180,7 +195,10 @@ export class World {
     }
     this.time += dt;
     const restored = this.terrain.restoreDue(this.time);
-    if (restored.length) this.events.push({ type: 'restore', cells: restored });
+    if (restored.length) {
+      this.events.push({ type: 'restore', cells: restored });
+      this.launchFromRestore(restored);
+    }
     this.updatePlayer(dt, input);
     this.updateFlow();
     for (const e of this.enemies) this.updateEnemy(e, dt);
@@ -190,6 +208,39 @@ export class World {
     for (const e of this.enemies) if (e.state === 'dead') e.deadT += dt;
     if (this.setup.waves) this.updateWaves(dt);
     this.terrain.animate(dt);
+  }
+
+  /** 타격 멈춤은 겹치면 긴 쪽 하나만(누적하지 않는다) */
+  private freeze(sec: number): void {
+    this.hitstop = Math.max(this.hitstop, sec);
+  }
+
+  /**
+   * 지형 환원: 원래 표고로 돌아온 칸 위의 적을 지면으로 올린 뒤 위로 튕긴다.
+   * 수평으로는 밀지 않는다(지형 속 끼임·맵 밖 이탈 없음). 이미 공중(launched)이면 다시 띄우지 않는다.
+   * 환원 자체는 피해를 주지 않는다.
+   */
+  private launchFromRestore(cells: number[]): void {
+    const set = new Set(cells);
+    const t = this.terrain;
+    for (const e of this.enemies) {
+      if (e.state === 'dead' || e.state === 'launched') continue;
+      const [cx, cy] = t.cellOf(e.x, e.y);
+      if (!t.inBounds(cx, cy) || !set.has(t.idx(cx, cy))) continue;
+      const ground = t.height[t.idx(cx, cy)];
+      e.z = Math.max(e.z, ground);
+      e.vz = tune.restoreLaunch;
+      e.peakZ = e.z;
+      e.airborne = true;
+      e.launchGround = ground;
+      e.state = 'launched';
+      e.t = 0;
+      e.knockT = 0;
+      e.postStun = 0;
+      e.exposedT = (2 * tune.restoreLaunch) / GRAVITY + tune.airExposed;
+      this.stats.launches++;
+      this.events.push({ type: 'launch', x: e.x, y: e.y, z: e.z });
+    }
   }
 
   // ── 플레이어 ────────────────────────────────────────────
@@ -291,6 +342,7 @@ export class World {
     if (levels >= 1.5) {
       // 2단 이상 낙하 착지 = 충격파. 대시로 뛰어내렸으면 대시 쿨다운 반환
       this.stats.shocks++;
+      this.freeze(tune.hitstopStrong);
       this.events.push({ type: 'shock', x: p.x, y: p.y, z: p.z, radius: tune.shockRadius });
       for (const e of this.enemies) {
         if (e.state === 'dead') continue;
@@ -387,7 +439,8 @@ export class World {
     for (const e of this.enemies) {
       if (e.state === 'dead') continue;
       if (distToSegment(e.x, e.y, x0, y0, x1, y1) > tune.bladeHitWidth) continue;
-      e.hp -= 1;
+      const air = e.exposedT > 0;
+      e.hp -= air ? tune.airHitDamage : 1;
       e.flash = 0.12;
       const [ecx, ecy] = this.terrain.cellOf(e.x, e.y);
       if (!collapsed.has(this.terrain.idx(ecx, ecy))) {
@@ -395,12 +448,20 @@ export class World {
         e.knockY = dy * ENEMY.bladeKnock;
         e.knockT = ENEMY.knockTime;
       }
-      this.events.push({ type: 'hit', x: e.x, y: e.y, z: e.z });
+      if (air) {
+        // 공중 추가타: 강한 타격 멈춤, 살짝 더 띄운다
+        this.stats.airHits++;
+        this.freeze(tune.hitstopStrong);
+        if (e.state === 'launched') e.vz = Math.max(e.vz, 5);
+        this.events.push({ type: 'airHit', x: e.x, y: e.y, z: e.z });
+      } else {
+        this.events.push({ type: 'hit', x: e.x, y: e.y, z: e.z });
+      }
       hitSomething = true;
-      if (e.hp <= 0) this.kill(e, 'blade');
+      if (e.hp <= 0) this.kill(e, air ? 'air' : 'blade');
       else this.stun(e, ENEMY.bladeStun);
     }
-    if (hitSomething) this.hitstop = tune.hitstop;
+    if (hitSomething) this.freeze(tune.hitstop);
   }
 
   // ── 적 ─────────────────────────────────────────────────
@@ -415,6 +476,10 @@ export class World {
 
   private stun(e: Enemy, sec: number): void {
     if (e.state === 'dead') return;
+    if (e.state === 'launched') {
+      e.postStun = Math.max(e.postStun, sec);
+      return;
+    }
     const remaining = e.state === 'stun' ? e.t : 0;
     e.state = 'stun';
     e.t = Math.max(remaining, sec);
@@ -426,11 +491,13 @@ export class World {
     e.deadT = 0;
     e.deathCause = cause;
     this.stats.kills[cause]++;
+    this.freeze(tune.hitstopStrong);
     this.events.push({ type: 'kill', x: e.x, y: e.y, z: e.z, cause, kind: e.kind });
   }
 
   private updateEnemy(e: Enemy, dt: number): void {
     e.flash = Math.max(0, e.flash - dt);
+    e.exposedT = Math.max(0, e.exposedT - dt);
     const t = this.terrain;
     const p = this.player;
 
@@ -451,7 +518,22 @@ export class World {
 
     const ground = enemyGround(t, e);
     const landed = this.verticalStep(e, ground, dt, GRAVITY);
-    if (landed !== null) {
+    if (landed !== null && e.state === 'launched') {
+      // 환원으로 뜬 적의 착지: 튕겨 오른 자리보다 낮게 떨어졌을 때만 낙하 피해(환원 자체로는 죽지 않음)
+      const drop = e.launchGround - e.z;
+      this.events.push({ type: 'land', x: e.x, y: e.y, z: e.z, levels: Math.max(0, drop), who: 'enemy' });
+      if (drop >= 1.5) {
+        e.hp -= Math.round(drop) - 1;
+        e.flash = 0.12;
+        if (e.hp <= 0) {
+          this.kill(e, 'fall');
+          return;
+        }
+      }
+      e.state = 'stun';
+      e.t = Math.max(tune.airStun, e.postStun, drop >= 1.5 ? ENEMY.fallStun : 0);
+      e.postStun = 0;
+    } else if (landed !== null) {
       this.events.push({ type: 'land', x: e.x, y: e.y, z: e.z, levels: landed, who: 'enemy' });
       if (landed >= 1.5) {
         e.hp -= Math.round(landed) - 1;
@@ -694,6 +776,8 @@ export class World {
       if (mode === 'enemyWalk' && (kind === 'abyss' || (kind === 'drop' && from - to > 1.5))) return false;
       b.x = nx;
       b.y = ny;
+      // 걸어서 턱을 오르면 그 자리에서 바로 새 지면 높이로(한 프레임이라도 땅속에 있지 않게)
+      if (!b.airborne && to < 50 && to > b.z) b.z = to;
       return true;
     };
     if (dx !== 0) tryMove(b.x + dx, b.y);
@@ -734,9 +818,10 @@ export class World {
     return {
       mode: this.mode,
       time: this.time,
+      hitstop: this.hitstop,
       scenario: this.setup.name,
       player: { x: p.x, y: p.y, z: p.z, hp: p.hp, airborne: p.airborne, dashing: p.dashT > 0, inv: p.inv, boost: p.boost },
-      enemies: this.enemies.map((e) => ({ id: e.id, kind: e.kind, x: e.x, y: e.y, z: e.z, hp: e.hp, state: e.state, airborne: e.airborne, cause: e.deathCause ?? null })),
+      enemies: this.enemies.map((e) => ({ id: e.id, kind: e.kind, x: e.x, y: e.y, z: e.z, hp: e.hp, state: e.state, airborne: e.airborne, exposed: e.exposedT > 0, cause: e.deathCause ?? null })),
       bolts: this.bolts.map((b) => ({ x: b.x, y: b.y, alt: b.alt })),
       stats: structuredClone(this.stats),
     };

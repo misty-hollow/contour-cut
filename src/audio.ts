@@ -83,6 +83,16 @@ export class Sfx {
   fire(): void {
     this.tone('square', 900, 1300, 0.06, 0.04);
   }
+  /** 지형 환원으로 적이 튕겨 오름 */
+  launch(): void {
+    this.tone('triangle', 180, 720, 0.22, 0.12);
+    this.hiss(0.18, 0.1, 1400, 1);
+  }
+  /** 무방비 적에게 들어간 공중 추가타 */
+  airHit(): void {
+    this.tone('square', 520, 160, 0.1, 0.14);
+    this.tone('triangle', 1600, 900, 0.12, 0.08);
+  }
   blocked(): void {
     this.tone('triangle', 260, 180, 0.05, 0.06);
   }

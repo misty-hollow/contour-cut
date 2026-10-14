@@ -1,6 +1,14 @@
-import { CELL, ENEMY, GRID_H, GRID_W, LEVEL_PX, ORIGIN_Y, VIEW_H, VIEW_W, tune } from './config';
+import { CELL, ENEMY, GRID_H, GRID_W, VIEW_H, VIEW_W, screenY, tune } from './config';
 import { isAbyss } from './terrain';
 import type { Enemy, GameEvent, World } from './world';
+
+/** 조준: 평면 조준점 + 실제 커서 화면 위치 + 잡힌 적 */
+export interface Aim {
+  x: number;
+  y: number;
+  cursor: { x: number; y: number } | null;
+  target: Enemy | null;
+}
 
 // 측량 잉크 팔레트: 고도마다 다른 형광색 등고선, 어두운 남색 지면, 심연 테두리는 경고 적색
 export const LINE = ['#2f7bff', '#19f5c8', '#6cff4f', '#e8ff3a', '#ffb02e', '#ff4fa3', '#b77bff'];
@@ -41,33 +49,90 @@ interface Ring {
   color: string;
 }
 
-const sy = (y: number, z: number) => Math.round(y + ORIGIN_Y - z * LEVEL_PX);
+const sy = screenY;
 
+/** 카메라 상태(관찰용). zoom 1 = 연출 없음 */
+export interface CameraState {
+  zoom: number;
+  fx: number;
+  fy: number;
+  shakeX: number;
+  shakeY: number;
+}
+
+/**
+ * 그리기는 두 단계다. ① 480×270 픽셀 화면(view)에 지금까지와 똑같이 그린다.
+ * ② 표시 캔버스에 정수 배율 k로 옮기면서 카메라(줌·흔들림)를 적용한다. 줌 1·흔들림 0이면 ①을 그대로 확대한 것과 같다.
+ */
 export class Renderer {
   readonly ctx: CanvasRenderingContext2D;
+  private readonly view: HTMLCanvasElement;
+  private readonly display: HTMLCanvasElement;
+  private readonly dctx: CanvasRenderingContext2D;
+  private k = 1;
   private particles: Particle[] = [];
   private slashes: Slash[] = [];
   private rings: Ring[] = [];
   private ghosts: { x: number; y: number; z: number; t: number }[] = [];
   private shakeT = 0;
+  private shakeDur = 0;
   private shakeAmp = 0;
   private hurtT = 0;
   private bg: HTMLCanvasElement;
   private clock = 0;
+  private restoredAt = new Float64Array(GRID_W * GRID_H).fill(-Infinity);
+  /** 순간 줌인(주요 타격)과 대시 낙하 줌아웃 */
+  private punch = 0;
+  private punchT = 0;
+  private dashOut = 0;
+  readonly cam: CameraState = { zoom: 1, fx: VIEW_W / 2, fy: VIEW_H / 2, shakeX: 0, shakeY: 0 };
 
   constructor(canvas: HTMLCanvasElement) {
-    canvas.width = VIEW_W;
-    canvas.height = VIEW_H;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('2D canvas unavailable');
-    this.ctx = ctx;
-    ctx.imageSmoothingEnabled = false;
+    this.display = canvas;
+    const dctx = canvas.getContext('2d');
+    if (!dctx) throw new Error('2D canvas unavailable');
+    this.dctx = dctx;
+    this.view = document.createElement('canvas');
+    this.view.width = VIEW_W;
+    this.view.height = VIEW_H;
+    this.ctx = this.view.getContext('2d')!;
+    this.ctx.imageSmoothingEnabled = false;
     this.bg = makeBackground();
+    this.resize(1);
+  }
+
+  /** 표시 캔버스의 정수 배율(화면 배율 × 기기 픽셀 비율) */
+  resize(k: number): void {
+    this.k = Math.max(1, Math.min(8, Math.round(k)));
+    this.display.width = VIEW_W * this.k;
+    this.display.height = VIEW_H * this.k;
+    this.dctx.imageSmoothingEnabled = false;
   }
 
   shake(amp: number, t: number): void {
-    this.shakeAmp = Math.max(this.shakeAmp, amp * tune.shake);
+    const a = amp * tune.shake;
+    if (a <= 0) return;
+    this.shakeAmp = Math.max(this.shakeAmp, a);
     this.shakeT = Math.max(this.shakeT, t);
+    this.shakeDur = Math.max(this.shakeDur, t);
+  }
+
+  /** 순간 줌인. 짧게(0.12초) 돌아온다 */
+  private zoomPunch(amount: number): void {
+    this.punch = Math.max(this.punch, amount);
+    this.punchT = 0.12;
+  }
+
+  /** 내부 화면 좌표(흔들림 제외) → 카메라 적용 전 view 좌표 */
+  screenToView(x: number, y: number): { x: number; y: number } {
+    const c = this.cam;
+    return { x: (x - c.fx * (1 - c.zoom)) / c.zoom, y: (y - c.fy * (1 - c.zoom)) / c.zoom };
+  }
+
+  /** view 좌표 → 카메라를 적용한 내부 화면 좌표(흔들림 제외) */
+  viewToScreen(x: number, y: number): { x: number; y: number } {
+    const c = this.cam;
+    return { x: x * c.zoom + c.fx * (1 - c.zoom), y: y * c.zoom + c.fy * (1 - c.zoom) };
   }
 
   consume(events: GameEvent[], world: World): void {
@@ -101,11 +166,26 @@ export class Renderer {
         case 'shock':
           this.rings.push({ x: ev.x, y: sy(ev.y, ev.z), r: ev.radius, t: 0, max: 0.28, color: RIM });
           this.shake(3, 0.18);
+          this.zoomPunch(0.03);
+          break;
+        case 'launch':
+          // 지형 환원: 발밑에서 위로 솟는 잉크 파편
+          this.burst(ev.x, sy(ev.y, ev.z), '#19f5c8', 10, 50, 0.45, -60);
+          this.rings.push({ x: ev.x, y: sy(ev.y, ev.z), r: 9, t: 0, max: 0.25, color: '#19f5c8' });
+          this.zoomPunch(0.015);
+          break;
+        case 'airHit':
+          this.burst(ev.x, sy(ev.y, ev.z) - 4, '#ffffff', 12, 90, 0.3);
+          this.burst(ev.x, sy(ev.y, ev.z) - 4, '#19f5c8', 8, 60, 0.35);
+          this.rings.push({ x: ev.x, y: sy(ev.y, ev.z) - 4, r: 8, t: 0, max: 0.16, color: '#ffffff' });
+          this.shake(2.5, 0.14);
+          this.zoomPunch(0.045);
           break;
         case 'kill': {
           const col = ev.kind === 'chaser' ? CHASER : SHOOTER;
           if (ev.cause !== 'abyss') this.burst(ev.x, sy(ev.y, ev.z) - 4, col, 18, 80, 0.5);
           this.shake(2, 0.15);
+          this.zoomPunch(0.035);
           break;
         }
         case 'fallAbyss':
@@ -120,8 +200,10 @@ export class Renderer {
           this.burst(ev.x, sy(ev.y, ev.z), SHOOTER, 6, 40, 0.25);
           break;
         case 'restore':
-          for (const i of ev.cells)
+          for (const i of ev.cells) {
+            this.restoredAt[i] = this.clock;
             if ((i * 7) % 5 === 0) this.burst(((i % terr.w) + 0.5) * CELL, sy((Math.floor(i / terr.w) + 0.5) * CELL, terr.base[i]), '#bff7ff', 1, 20, 0.45, -30);
+          }
           break;
         case 'spawn':
           this.rings.push({ x: ev.x, y: sy(ev.y, world.terrain.heightAt(ev.x, ev.y)), r: 10, t: 0, max: 0.9, color: SHOOTER });
@@ -142,18 +224,13 @@ export class Renderer {
     }
   }
 
-  draw(world: World, dt: number, aim: { x: number; y: number } | null): void {
+  draw(world: World, dt: number, aim: Aim | null): void {
     const ctx = this.ctx;
     this.clock += dt;
-    this.shakeT = Math.max(0, this.shakeT - dt);
-    if (this.shakeT === 0) this.shakeAmp = 0;
-    const ox = this.shakeT > 0 ? Math.round((Math.random() * 2 - 1) * this.shakeAmp) : 0;
-    const oy = this.shakeT > 0 ? Math.round((Math.random() * 2 - 1) * this.shakeAmp) : 0;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.drawImage(this.bg, 0, 0);
-    ctx.setTransform(1, 0, 0, 1, ox, oy);
 
     const p = world.player;
     if (p.dashT > 0) this.ghosts.push({ x: p.x, y: p.y, z: p.z, t: 0 });
@@ -172,18 +249,64 @@ export class Renderer {
     this.drawBolts(world);
     if (aim && world.mode === 'play') this.drawAim(world, aim);
     this.drawFx(dt);
+    this.present(world, dt);
+  }
+
+  /** ② 카메라를 적용해 표시 캔버스로 옮긴다 */
+  private present(world: World, dt: number): void {
+    const d = this.dctx;
+    const k = this.k;
+    const p = world.player;
+    const c = this.cam;
+
+    // 고지대에서 저지대로 대시해 활강하는 동안 미세한 줌아웃
+    const ground = world.terrain.heightAt(p.x, p.y);
+    const gliding = p.dashT > 0 && p.airborne && p.peakZ - Math.max(0, ground) >= 1.5;
+    const target = gliding ? 0.06 : 0;
+    this.dashOut += (target - this.dashOut) * Math.min(1, dt * (gliding ? 10 : 4));
+    if (Math.abs(this.dashOut) < 0.0005) this.dashOut = 0;
+    this.punchT = Math.max(0, this.punchT - dt);
+    if (this.punchT === 0) this.punch = 0;
+    const punchNow = this.punch * (this.punchT / 0.12);
+    c.zoom = 1 + (punchNow - this.dashOut) * tune.zoomFx;
+    // 줌 중심 = 플레이어(화면 밖으로 치우치지 않게 제한)
+    c.fx = Math.max(0, Math.min(VIEW_W, p.x));
+    c.fy = Math.max(0, Math.min(VIEW_H, sy(p.y, p.z) - 6));
+
+    // 흔들림: 시간에 따라 잦아든다(표시 해상도에서 1/k픽셀 단위)
+    this.shakeT = Math.max(0, this.shakeT - dt);
+    if (this.shakeT === 0) {
+      this.shakeAmp = 0;
+      this.shakeDur = 0;
+    }
+    const amp = this.shakeDur > 0 ? this.shakeAmp * (this.shakeT / this.shakeDur) : 0;
+    c.shakeX = amp > 0 ? (Math.random() * 2 - 1) * amp : 0;
+    c.shakeY = amp > 0 ? (Math.random() * 2 - 1) * amp : 0;
+
+    d.setTransform(1, 0, 0, 1, 0, 0);
+    d.globalAlpha = 1;
+    d.fillStyle = '#02030a';
+    d.fillRect(0, 0, this.display.width, this.display.height);
+    d.imageSmoothingEnabled = false;
+    const sx = k * c.zoom;
+    d.setTransform(sx, 0, 0, sx, Math.round(k * (c.fx * (1 - c.zoom) + c.shakeX)), Math.round(k * (c.fy * (1 - c.zoom) + c.shakeY)));
+    d.drawImage(this.view, 0, 0);
+    d.setTransform(1, 0, 0, 1, 0, 0);
+
+    // 피격 테두리는 카메라와 무관하게 화면 가장자리에
     if (this.hurtT > 0) {
       this.hurtT -= dt;
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.globalAlpha = Math.max(0, this.hurtT / 0.3) * 0.5;
-      ctx.fillStyle = '#ff1f3d';
-      ctx.fillRect(0, 0, VIEW_W, 4);
-      ctx.fillRect(0, VIEW_H - 4, VIEW_W, 4);
-      ctx.fillRect(0, 0, 4, VIEW_H);
-      ctx.fillRect(VIEW_W - 4, 0, 4, VIEW_H);
-      ctx.globalAlpha = 1;
+      d.globalAlpha = Math.max(0, this.hurtT / 0.3) * 0.5;
+      d.fillStyle = '#ff1f3d';
+      const w = this.display.width;
+      const h = this.display.height;
+      const b = 4 * k;
+      d.fillRect(0, 0, w, b);
+      d.fillRect(0, h - b, w, b);
+      d.fillRect(0, 0, b, h);
+      d.fillRect(w - b, 0, b, h);
+      d.globalAlpha = 1;
     }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   private drawCell(world: World, cx: number, cy: number): void {
@@ -227,7 +350,8 @@ export class Renderer {
 
     const lvl = Math.min(6, h);
     const flash = now - t.cutAt[i] < 0.07;
-    ctx.fillStyle = flash ? '#ffffff' : TOP[lvl];
+    const restoring = this.clock - this.restoredAt[i] < 0.1;
+    ctx.fillStyle = flash ? '#ffffff' : restoring ? '#bff7ff' : TOP[lvl];
     ctx.fillRect(x, top, CELL, CELL);
 
     // 베인 지형: 균열 무늬, 복구 직전 깜빡임
@@ -343,6 +467,13 @@ export class Renderer {
       }
       drawMarker(ctx, x, y, white ? '#ffffff' : SHOOTER, e.state === 'windup');
     }
+    if (e.exposedT > 0 && e.state !== 'dead') {
+      // 무방비 표식: 머리 위 깜빡이는 마름모(지금 베면 공중 추가타)
+      ctx.fillStyle = Math.floor(this.clock * 14) % 2 === 0 ? '#ffffff' : '#19f5c8';
+      ctx.fillRect(x, y - 17, 1, 1);
+      ctx.fillRect(x - 1, y - 16, 3, 1);
+      ctx.fillRect(x, y - 15, 1, 1);
+    }
     if (e.state === 'stun') {
       ctx.fillStyle = '#e8ff3a';
       const a = this.clock * 10;
@@ -372,7 +503,7 @@ export class Renderer {
   }
 
   /** 조준: 칼날이 닿을 선과, 그 선이 벨 등고선 위치를 미리 보여 준다 */
-  private drawAim(world: World, aim: { x: number; y: number }): void {
+  private drawAim(world: World, aim: Aim): void {
     const ctx = this.ctx;
     const p = world.player;
     let dx = aim.x - p.x;
@@ -395,9 +526,20 @@ export class Renderer {
         ctx.fillRect(cx, cyy - 2, 1, 5);
       }
     }
-    // 조준점: 측량 십자
-    const ax = Math.round(aim.x);
-    const ay = sy(aim.y, p.z);
+    // 조준이 잡힌 적: 몸통을 감싸는 괄호
+    if (aim.target) {
+      const e = aim.target;
+      const ex = Math.round(e.x);
+      const feet = sy(e.y, e.z);
+      ctx.fillStyle = '#ffffff';
+      for (const [bx, by, w, h] of [
+        [ex - 7, feet - 15, 3, 1], [ex - 7, feet - 15, 1, 3], [ex + 5, feet - 15, 3, 1], [ex + 7, feet - 15, 1, 3],
+        [ex - 7, feet + 2, 3, 1], [ex - 7, feet, 1, 3], [ex + 5, feet + 2, 3, 1], [ex + 7, feet, 1, 3],
+      ]) ctx.fillRect(bx, by, w, h);
+    }
+    // 조준점: 측량 십자(실제 커서 자리)
+    const ax = Math.round(aim.cursor ? aim.cursor.x : aim.x);
+    const ay = aim.cursor ? Math.round(aim.cursor.y) : sy(aim.y, p.z);
     ctx.fillStyle = '#19f5c8';
     ctx.fillRect(ax - 4, ay, 3, 1);
     ctx.fillRect(ax + 2, ay, 3, 1);

@@ -156,6 +156,20 @@ body {
   max-width: 80%;
   color: var(--ink);
 }
+.lore {
+  max-width: 80%;
+  margin: 0 0 calc(2px * var(--s));
+  color: var(--dim);
+  font-size: calc(5.5px * var(--s));
+}
+#tune .calm {
+  display: block;
+  margin: calc(2px * var(--s)) 0;
+  color: #e8ff3a;
+}
+#tune .calm input {
+  width: auto;
+}
 .note {
   color: var(--dim);
   font-size: calc(5px * var(--s));
