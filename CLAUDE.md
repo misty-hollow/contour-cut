@@ -5,7 +5,7 @@
 
 ## 협업 원칙
 
-- 구현과 기술적 판단은 AI가 맡는다. 요청 범위 안의 통상적인 수정·검증·커밋·PR은 사용자에게 확인받지 않고 진행한다.
+- 구현과 기술적 판단은 AI가 맡는다. 통상적인 개발 요청은 조사·구현·검증·PR·병합까지 위임된 것으로 보고, 단계마다 사용자에게 확인받지 않고 진행한다. 사용자가 병합 보류나 검토만 요청했으면 병합하지 않는다. 병합 확인 창(권한 설정)과 아래 "승인 필요 행동"은 그대로 거친다.
 - 사용자에게 묻는 것은 요청 범위에서 정할 수 없는 제품 방향과 아래 "승인 필요 행동"뿐이다.
 - 재미·조작감·난이도·비주얼·소리의 최종 판단은 사용자다. 직접 플레이해 볼 화면과 볼 점을 짧게 알린다. 이미 확인받은 항목은 다시 묻지 않는다.
 - 요청 범위 밖의 다음 기능은 시작하지 않고 `docs/WORKLOG.md`에 적는다.
@@ -40,7 +40,8 @@
 ## 브랜치·커밋·병합
 
 - 작업 브랜치 `feat/…` `fix/…` `tune/…` `docs/…` `chore/…`. main에 직접 push하지 않는다. 커밋 메시지는 `feat: …` 형식.
-- 병합은 사용자가 그 작업에서 병합까지 요청했을 때 한다. 병합 직전 최신 origin/main을 반영(up-to-date 필수)하고, 최종 head의 `ci` 성공을 확인한 뒤 `gh pr merge <N> --merge --match-head-commit <sha>`. `--admin`·`--auto`는 쓰지 않는다. 병합 후 main CI를 확인하고 로컬 브랜치는 `git branch -d`.
+- 병합(위 "협업 원칙"의 위임 범위 안에서): 병합 직전 최신 origin/main을 반영(up-to-date 필수)하고, 최종 head의 `ci` 성공을 확인한 뒤 `gh pr merge <N> --merge --match-head-commit <sha>`. `--admin`·`--auto`는 쓰지 않는다.
+- 병합 후: 병합 커밋의 트리가 검증한 최종 head의 트리와 같은지 확인한다(`git rev-parse <merge>^{tree} <head>^{tree}`). 다르면 원인을 확인하고 필요한 검증을 다시 한다. main CI를 확인하고 로컬 브랜치는 `git branch -d`.
 - 커밋하지 않는다: `.claude/settings.local.json`과 백업, 인증 정보·토큰·`.env*`, `node_modules/`, `dist/`, `test-results/`, `playwright-report/`. `.claude/` 아래는 개별 경로로만 `git add`(`git add .claude/`·`git add -A` 금지).
 
 ## 승인 필요 행동
