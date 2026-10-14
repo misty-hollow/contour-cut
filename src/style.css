@@ -321,6 +321,23 @@ body {
   word-break: keep-all;
   text-align: center;
   text-shadow: 0 0 calc(2px * var(--s)) #000;
+  transition: opacity 0.8s;
+}
+#hint.quiet {
+  opacity: 0.4;
+}
+#over-stats .big {
+  font-size: calc(6.5px * var(--s));
+}
+#over-stats .small {
+  color: var(--dim);
+  font-size: calc(5px * var(--s));
+}
+.key {
+  display: inline-block;
+  padding: 0 calc(2px * var(--s));
+  border: calc(0.5px * var(--s)) solid currentColor;
+  color: var(--ink);
 }
 
 .overlay {
@@ -336,6 +353,13 @@ body {
 }
 .hidden {
   display: none !important;
+}
+body.pre #hud {
+  visibility: hidden;
+}
+/* 타이틀: 가운데만 어둡게 — 가장자리로 지도가 비친다 */
+#title {
+  background: radial-gradient(ellipse 60% 70% at 50% 48%, rgba(2, 3, 10, 0.86) 0%, rgba(2, 3, 10, 0.62) 60%, rgba(2, 3, 10, 0.35) 100%);
 }
 
 #title h1 {
@@ -509,4 +533,8 @@ body {
   color: var(--magenta);
   font-size: calc(14px * var(--s));
   margin: 0 0 calc(4px * var(--s));
+}
+#over-note {
+  font-size: calc(6.5px * var(--s));
+  color: var(--ink);
 }
