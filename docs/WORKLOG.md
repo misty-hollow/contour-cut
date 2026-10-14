@@ -1,0 +1,33 @@
+# WORKLOG
+
+현재 상태·열린 문제·다음 작업만 짧게 둔다. 끝난 작업의 상세는 PR과 Git 이력에 있다.
+
+## 현재 상태 (2026-10-14)
+
+- main: 첫 여정 3구역(균열 지대·접힘 협곡·환원 구역) + 무한 웨이브 + 실험 시나리오. PR #1~#5 병합, 사용자 플레이 평가 모두 양호(DECISIONS P-005·P-009·P-011·P-012·P-014).
+- 운영: AI-Dev-Workflow v1.2 절차를 걷어 내고 `CLAUDE.md`만 따른다(P-016). GitHub 설정(공개, main 보호, 필수 체크 `ci`, merge commit, head 자동 삭제, Pages 없음)과 `.claude/settings.json`은 그대로.
+
+## 열린 작업
+
+- PR #6 `feat/hud-diet-render` — "UI System 적용 — 1단계 HUD 다이어트" + 2.5D 렌더링 개선(가려진 적 윤곽, 기기 픽셀 정수 배율). 구현되어 CI 통과(`69ded60`)한 채 열려 있고 병합되지 않았다. 운영 전환 PR에서는 손대지 않았다.
+  - 다시 진행할 때: main을 병합하면 `CLAUDE.md`·`README.md`·`docs/DECISIONS.md` 충돌과 `docs/REPORT.md` 수정/삭제 충돌이 난다. REPORT 내용은 PR 본문·WORKLOG로 옮기고, 그 PR의 B절 문구는 `CLAUDE.md` "프로젝트 고유 제약"·e2e 설명에 맞춘다. PR #6이 기다리던 사용자 입력 Codex 리뷰는 이제 필수가 아니다.
+  - 남은 사용자 확인 5건(PR #6 `docs/REPORT.md` "사용자 확인 요청"): HUD 전체 가독성, 전투 중 처치 통계 제거, 가림 윤곽(`?scenario=hidden`), 125%·150% 배율 선명도, 알림 색·두 줄 힌트.
+  - 디자인 자료: 사용자가 첨부한 `Downloads/Contour Cut UI System.zip`.
+
+## 열린 문제·검증 공백
+
+- 고DPR(125%·150%) 실제 모니터 선명도: 미검증(PR #6은 Chromium DPR 에뮬레이션 검사까지).
+- 기준 스크린샷 비교: 수단 없음. 비주얼 방향이 정해지면 시드 고정 화면부터 도입.
+- 소리: 자동 확인 수단 없음 — 사용자 판단.
+- 사람 플레이의 난이도·리듬: e2e 자동 조작은 경로 성립과 콤보 발생만 확인한다.
+- 알려진 기존 규칙(사용자 평가에 포함, 유지): 심연 너머로 베면 발밑까지 무너짐(힌트로 안내), 표고 4 지형 바로 북쪽 적의 일부 가림(PR #6이 윤곽으로 대응).
+
+## 다음 작업 (P-010 후속 순서)
+
+1. UI System 적용 — 1단계 HUD 다이어트(PR #6 마무리, 위)
+2. 비주얼·사운드·UX 고도화
+3. 신규 플레이어 완주 검증
+
+## 과거 기록
+
+- v1.2 운영 시기의 `CLAUDE.md`(A~I절, 전환 기간 확인표)와 `docs/REPORT.md`(PR #5 상세 보고)는 운영 전환 직전 main 커밋 `8cba67e`에 있다: `git show 8cba67e:docs/REPORT.md`, `git show 8cba67e:CLAUDE.md`.

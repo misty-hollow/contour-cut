@@ -1,8 +1,8 @@
 name: CI
 
-# PR과 main push에서만 돈다(AI-Dev-Workflow v1.2 WORKFLOW 8절 6). 경로 필터를 두지 않는다.
+# PR과 main push에서만 돈다. 경로 필터를 두지 않는다.
 # 완료·병합 조건은 PR 최신 변경의 필수 체크 `ci`이고, main push 실행은 병합 후 검증이다.
-# AI API를 부르지 않고, 외부로 아무것도 올리지 않는다(아티팩트 업로드 없음, CLAUDE.md E절).
+# AI API를 부르지 않고, 외부로 아무것도 올리지 않는다(아티팩트 업로드 없음, CLAUDE.md "프로젝트 고유 제약").
 on:
   pull_request:
     branches: [main]
@@ -43,7 +43,7 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      # 실행 검증 ①: 프로덕션 빌드를 띄우고 실제 키보드·마우스 입력으로 대표 플레이 경로를 돈다
+      # 실행 검증: 프로덕션 빌드를 띄우고 실제 키보드·마우스 입력으로 대표 플레이 경로를 돈다
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

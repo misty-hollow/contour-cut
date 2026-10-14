@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 
-// 디버그 핸들은 관찰(snapshot·heightAt)과 좌표 변환(project)에만 쓴다. 행동은 실제 마우스·키보드로(CLAUDE.md B절).
+// 디버그 핸들은 관찰(snapshot·heightAt)과 좌표 변환(project)에만 쓴다. 행동은 실제 마우스·키보드로(CLAUDE.md "프로젝트 고유 제약").
 
 export const cellC = (n: number) => (n + 0.5) * 6;
 
