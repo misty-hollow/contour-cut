@@ -1,5 +1,6 @@
 import { CELL, ENEMY, GRID_H, GRID_W, VIEW_H, VIEW_W, screenY, tune } from './config';
 import { terrainCoversAfterRow } from './input';
+import { drawHound, drawKain, drawKainDown, drawMarker, houndKey, kainKey, markerKey, type HoundPose, type KainPose, type MarkerPose } from './sprites';
 import { isAbyss } from './terrain';
 import type { Enemy, GameEvent, World } from './world';
 
@@ -85,6 +86,26 @@ interface Mark {
 
 /** 구역 시작·재시작 때 플레이어에서 퍼지는 측량 신호가 지도를 드러내는 시간(초). 입력·시뮬레이션은 막지 않는다 */
 const INTRO_SEC = 0.45;
+/** 측량도 휘두르기 표시 시간(초). 판정은 절단 순간 그대로 */
+const SWING_SEC = 0.16;
+/** 공중 추가타 멈춘 한 장의 길이(초, 표시 시간). 시뮬레이션 타격 멈춤(hitstopStrong)과 별개 */
+const IMPACT_SEC = 0.1;
+
+interface FoePose {
+  hound: HoundPose;
+  marker: MarkerPose;
+}
+
+/** 구역 분위기: 떠다니는 입자의 종류(전투 정보 위에 겹쳐도 옅은 1px) */
+export type Mood = 'rift' | 'canyon' | 'restore' | 'plain';
+
+interface Mote {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  ph: number;
+}
 
 const sy = screenY;
 
@@ -114,9 +135,25 @@ export class Renderer {
   private streaks: Streak[] = [];
   private marks: Mark[] = [];
   private beams: { x: number; y: number; t: number }[] = [];
+  /** 늦게 터지는 먼지(침하가 다 내려앉는 순간) */
+  private later: { t: number; run: () => void }[] = [];
   private introT = INTRO_SEC;
+  private frameDt = 0;
+  /** 카인 애니메이션 상태(표시 전용) */
+  private kain = { px: NaN, py: NaN, phase: 0, mirror: false, turnT: 0, landT: 0, wasAir: false, slashT: 9, slashAng: 0, overT: 0 };
+  private lastKain: KainPose | null = null;
+  /** 공중 추가타 순간의 "멈춘 한 장": 장면을 어둡게 하고 맞은 적과 섬광만 남긴다(초) */
+  private impactT = 0;
+  private impactAt: { x: number; y: number } | null = null;
+  /** 공중 추가타와 같은 칼질로 다시 베인 칸: 섬광을 죽여 타격이 먼저 읽히게 한다(시뮬레이션 시각까지) */
+  private flashMute = new Float64Array(GRID_W * GRID_H).fill(-Infinity);
+  /** 적별 걸음 위상(표시 전용) */
+  private foes = new Map<number, { px: number; py: number; phase: number }>();
   /** 타이틀 화면: 지도를 위에서 아래로 훑는 측량 주사선 */
   titleScan = false;
+  private mood: Mood = 'plain';
+  private motes: Mote[] = [];
+  private vignette: HTMLCanvasElement;
   private shakeT = 0;
   private shakeDur = 0;
   private shakeAmp = 0;
@@ -143,6 +180,8 @@ export class Renderer {
     this.ctx = this.view.getContext('2d')!;
     this.ctx.imageSmoothingEnabled = false;
     this.bg = makeBackground();
+    this.vignette = makeVignette();
+    this.setMood('plain');
     this.resize(1);
   }
 
@@ -182,22 +221,37 @@ export class Renderer {
 
   consume(events: GameEvent[], world: World): void {
     const terr = world.terrain;
+    // 같은 칼질에 공중 추가타가 있으면, 그 칼질의 지형 섬광·교차 불꽃·먼지는 줄인다(타격 → 지형 순서로 읽히게)
+    const airSlash = events.some((e) => e.type === 'airHit');
     for (const ev of events) {
       switch (ev.type) {
         case 'slash': {
+          this.kain.slashT = 0;
+          this.kain.slashAng = Math.atan2(ev.y1 - ev.y0, ev.x1 - ev.x0);
           this.slashes.push({ x0: ev.x0, y0: sy(ev.y0, ev.z) - 4, x1: ev.x1, y1: sy(ev.y1, ev.z) - 4, t: 0 });
+          if (airSlash) {
+            for (const i of ev.cells) this.flashMute[i] = world.time + 0.12;
+            break;
+          }
           for (const c of ev.crossings) this.burst(c.x, sy(c.y, c.level), LINE[Math.min(6, c.level)], 10, 60, 0.35);
           if (ev.cells.length) {
             this.shake(2 + Math.min(3, ev.cells.length / 40), 0.22);
-            // 무너진 영역 가장자리에서 먼지
-            let n = 0;
-            for (const i of ev.cells) {
-              const cx = i % terr.w;
-              const cy = Math.floor(i / terr.w);
-              const edge = [terr.get(cx + 1, cy), terr.get(cx - 1, cy), terr.get(cx, cy + 1), terr.get(cx, cy - 1)].some((h) => h > terr.height[i] + 0.5 && h < 50);
-              if (!edge || (n++ & 1)) continue;
-              this.burst((cx + 0.5) * CELL, sy((cy + 0.5) * CELL, terr.height[i] + 3), '#8d97c9', 1, 25, 0.5, 40);
-            }
+            // 무너진 영역 가장자리에서 먼지: 땅이 다 내려앉는 순간(약 0.12초 뒤) 새 절벽 밑동에서 피어오르고, 짧게 쿵
+            const cells = ev.cells.slice();
+            this.later.push({
+              t: 0.12,
+              run: () => {
+                let n = 0;
+                for (const i of cells) {
+                  const cx = i % terr.w;
+                  const cy = Math.floor(i / terr.w);
+                  const edge = [terr.get(cx + 1, cy), terr.get(cx - 1, cy), terr.get(cx, cy + 1), terr.get(cx, cy - 1)].some((h) => h > terr.height[i] + 0.5 && h < 50);
+                  if (!edge || (n++ & 1)) continue;
+                  this.burst((cx + 0.5) * CELL, sy((cy + 0.5) * CELL, Math.max(0, terr.height[i]) + 0.5), '#8d97c9', 2, 22, 0.55, -18);
+                }
+                this.shake(1.5, 0.1);
+              },
+            });
           }
           break;
         }
@@ -225,6 +279,8 @@ export class Renderer {
           this.burst(ev.x, sy(ev.y, ev.z) - 4, '#19f5c8', 8, 60, 0.35);
           this.rings.push({ x: ev.x, y: sy(ev.y, ev.z) - 4, r: 13, t: 0, max: 0.2, color: '#ffffff' });
           this.streaks.push({ x: ev.x, y: sy(ev.y, ev.z) - 5, t: 0, max: 0.16, r0: 5, r1: 17, n: 8, rot: Math.random(), color: '#ffffff' });
+          this.impactT = IMPACT_SEC;
+          this.impactAt = { x: ev.x, y: ev.y };
           this.shake(2.5, 0.14);
           this.zoomPunch(0.045);
           break;
@@ -263,7 +319,13 @@ export class Renderer {
         case 'spawn':
           this.rings.push({ x: ev.x, y: sy(ev.y, world.terrain.heightAt(ev.x, ev.y)), r: 10, t: 0, max: 0.9, color: SHOOTER });
           break;
-        case 'dash':
+        case 'dash': {
+          // 대시 시작: 발밑에서 뒤로 튀는 먼지
+          const pl = world.player;
+          for (let q = 0; q < 5; q++)
+            this.particles.push({ x: ev.x, y: sy(ev.y, pl.z), vx: -pl.dashDx * (30 + Math.random() * 40) + (Math.random() - 0.5) * 20, vy: -10 - Math.random() * 15, life: 0.3, max: 0.3, color: '#9aa6e0', g: 80, size: 1 });
+          break;
+        }
         case 'fire':
         case 'wave':
           break;
@@ -282,10 +344,12 @@ export class Renderer {
   draw(world: World, dt: number, aim: Aim | null): void {
     const ctx = this.ctx;
     this.clock += dt;
+    this.frameDt = dt;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.drawImage(this.bg, 0, 0);
+    this.drawBeaconLight();
 
     const p = world.player;
     if (p.dashT > 0) this.ghosts.push({ x: p.x, y: p.y, z: p.z, t: 0 });
@@ -307,6 +371,9 @@ export class Renderer {
     if (world.marker) this.drawBeacon(world, world.marker, '#19f5c8');
     this.drawBolts(world);
     if (aim && world.mode === 'play') this.drawAim(world, aim);
+    this.drawMotes(dt);
+    ctx.drawImage(this.vignette, 0, 0);
+    this.drawImpact(world, dt);
     this.drawFx(dt);
     if (this.titleScan) this.drawScan();
     this.drawIntro(world, dt);
@@ -401,6 +468,17 @@ export class Renderer {
     if (isAbyss(h)) {
       ctx.fillStyle = '#000000';
       ctx.fillRect(x, top, CELL, CELL);
+      // 깊이: 가장자리 바로 밑은 붉은 열기, 안쪽으로는 천천히 가라앉는 지층선(아래로 멀어지는 공간)
+      const rimN = cy > 0 && !isAbyss(t.height[i - GRID_W]);
+      if (rimN) {
+        ctx.fillStyle = '#3a0716';
+        ctx.fillRect(x, top, CELL, 1);
+        ctx.fillStyle = '#1c0410';
+        ctx.fillRect(x, top + 1, CELL, 2);
+      }
+      const drift = Math.floor(this.clock * 5 + cy * 2) % 6;
+      ctx.fillStyle = '#100820';
+      ctx.fillRect(x, top + drift, CELL, 1);
       // 접힌 종이 틈 사이로 보이는 먼 별빛
       const hash = (cx * 73856093) ^ (cy * 19349663);
       if ((hash & 15) === 0 && Math.sin(this.clock * 3 + hash) > 0.3) {
@@ -433,8 +511,8 @@ export class Renderer {
     }
 
     // 등고선: 나보다 낮은 이웃과의 경계에 내 고도의 색으로. 막 무너진 칸은 흰 섬광, 막 환원된 칸은 시안 섬광(선에만)
-    const flash = now - t.cutAt[i] < 0.08;
-    const restoring = this.clock - this.restoredAt[i] < 0.16;
+    const flash = now - t.cutAt[i] < 0.08 && now > this.flashMute[i];
+    const restoring = this.clock - this.restoredAt[i] < 0.1;
     const edge = (nh: number) => nh < h || nh === -1;
     const hw = cx > 0 ? t.height[i - 1] : 99;
     const he = cx < GRID_W - 1 ? t.height[i + 1] : 99;
@@ -491,22 +569,83 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
+  /** 카인의 지금 자세: 실제로 움직인 거리로 걸음을 세고, 방향 전환·착지·피격·대시를 자세로 바꾼다 */
+  private kainPose(world: World): KainPose {
+    const p = world.player;
+    const k = this.kain;
+    const dt = this.frameDt;
+    if (Number.isNaN(k.px)) {
+      k.px = p.x;
+      k.py = p.y;
+    }
+    const dist = Math.hypot(p.x - k.px, p.y - k.py);
+    k.px = p.x;
+    k.py = p.y;
+    const speed = dt > 0 ? dist / dt : 0;
+    const moving = speed > 8 && !p.airborne && p.dashT === 0;
+    k.phase = moving ? k.phase + dist / 4.5 : 0;
+    const mirror = p.facingX < -0.01 ? true : p.facingX > 0.01 ? false : k.mirror;
+    if (mirror !== k.mirror) {
+      k.turnT = 0.05;
+      k.mirror = mirror;
+    }
+    k.turnT = Math.max(0, k.turnT - dt);
+    if (k.wasAir && !p.airborne) k.landT = 0.1;
+    k.wasAir = p.airborne;
+    k.landT = Math.max(0, k.landT - dt);
+    k.slashT += dt;
+    const dashing = p.dashT > 0;
+    return {
+      mirror,
+      back: p.facingY < -0.7 && Math.abs(p.facingX) < 0.4,
+      frame: moving ? Math.floor(k.phase) & 3 : 0,
+      breath: !moving && !dashing && !p.airborne && Math.floor(this.clock * 1.4) % 2 === 0 ? -1 : 0,
+      lean: k.turnT > 0 ? 0 : p.hurtT > 0 ? -1 : dashing || speed > 95 ? 1 : 0,
+      coat: dashing || p.airborne ? 2 : moving ? 1 : 0,
+      air: p.airborne,
+      squash: k.landT > 0.035 ? -1 : 0,
+      staff: k.slashT > SWING_SEC,
+    };
+  }
+
   private drawPlayer(world: World): void {
     const ctx = this.ctx;
     const p = world.player;
     const t = world.terrain;
     const x = Math.round(p.x);
     const y = sy(p.y, p.z);
+    const k = this.kain;
+    if (world.mode === 'over') {
+      // 쓰러짐: 비틀 → 무릎 → 엎드림, 모자가 굴러 떨어지고 발밑에서 붉은 등고선 고리가 번진다
+      k.overT += this.frameDt;
+      this.groundShadow(t, p.x, p.y, p.z);
+      drawKainDown(ctx, x, y, k.mirror, k.overT, '#ff6b6b');
+      if (k.overT > 0.36 && k.overT < 1.3) {
+        const q = (k.overT - 0.36) / 0.94;
+        ctx.globalAlpha = 1 - q;
+        pixCircle(ctx, x, y - 1, 4 + q * 26, '#ff2d55');
+        ctx.globalAlpha = (1 - q) * 0.5;
+        pixCircle(ctx, x, y - 1, 2 + q * 16, '#ff2d55');
+        ctx.globalAlpha = 1;
+      }
+      return;
+    }
+    k.overT = 0;
+    const pose = this.kainPose(world);
+    this.lastKain = pose;
     for (const g of this.ghosts) {
       ctx.globalAlpha = Math.max(0, 0.45 - g.t * 3);
-      drawSurveyor(ctx, Math.round(g.x), sy(g.y, g.z), p.facingX < 0, '#19f5c8', '#0b3a44');
+      drawKain(ctx, Math.round(g.x), sy(g.y, g.z), { ...pose, frame: 0, breath: 0 }, '#19f5c8', '#0b3a44');
     }
     ctx.globalAlpha = 1;
     this.groundShadow(t, p.x, p.y, p.z);
-    const blink = p.inv > 0 && p.dashT === 0 && Math.floor(this.clock * 20) % 2 === 0;
+    const blink = p.inv > 0 && p.dashT === 0 && p.hurtT === 0 && Math.floor(this.clock * 20) % 2 === 0;
     if (p.z < -0.5) ctx.globalAlpha = Math.max(0, 1 + p.z / 5);
-    if (!blink) drawSurveyor(ctx, x, y, p.facingX < 0, p.hurtT > 0 ? '#ff6b6b' : RIM, '#000000');
+    // 피격 직후 잠깐 흰색, 그다음 적색
+    const rim = p.hurtT > 0.2 ? '#ffffff' : p.hurtT > 0 ? '#ff6b6b' : RIM;
+    if (!blink) drawKain(ctx, x, y, pose, rim, '#000000');
     ctx.globalAlpha = 1;
+    this.drawSwing(x, y, pose);
     // 낙차 가속 표시: 발밑의 짧은 잔광
     if (p.boostT > 0 && p.boost > 0) {
       ctx.fillStyle = '#19f5c8';
@@ -516,6 +655,97 @@ export class Renderer {
     }
   }
 
+  /** 측량도 휘두르기: 어깨에서 조준 방향으로 칼날이 쓸고 지나가며 시안 잔상 호를 남긴다(SWING_SEC 동안) */
+  private drawSwing(x: number, y: number, pose: KainPose): void {
+    const k = this.kain;
+    if (k.slashT >= SWING_SEC) return;
+    const ctx = this.ctx;
+    const q = k.slashT / SWING_SEC;
+    const e = 1 - (1 - Math.min(1, q * 1.7)) ** 3;
+    const side = pose.mirror ? -1 : 1;
+    const sx = x + side;
+    const syy = y - 6;
+    const ang = (u: number) => k.slashAng + side * (-1.15 + 1.6 * u);
+    for (let i = 4; i >= 1; i--) {
+      const a = ang(Math.max(0, e - i * 0.09));
+      ctx.globalAlpha = (1 - q) * (0.7 - i * 0.12);
+      ctx.fillStyle = '#19f5c8';
+      for (let r = 5; r <= 15; r++) ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(syy + Math.sin(a) * r), 1, 1);
+    }
+    const a = ang(e);
+    ctx.globalAlpha = 1 - q * 0.6;
+    ctx.fillStyle = '#000000';
+    for (let r = 1; r <= 3; r++) ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(syy + Math.sin(a) * r), 1, 1);
+    ctx.fillStyle = '#e8fdff';
+    for (let r = 4; r <= 15; r++) ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(syy + Math.sin(a) * r), 1, 1);
+    ctx.globalAlpha = 1;
+  }
+
+  /** 적 자세: 걸음은 실제로 움직인 거리로, 준비·돌진·기절·조준·반동은 상태로 */
+  private foePose(e: Enemy): FoePose {
+    let f = this.foes.get(e.id);
+    if (!f) {
+      f = { px: e.x, py: e.y, phase: 0 };
+      this.foes.set(e.id, f);
+    }
+    const dist = Math.hypot(e.x - f.px, e.y - f.py);
+    f.px = e.x;
+    f.py = e.y;
+    if (e.state === 'walk' && dist > 0.05) f.phase += dist / 3.2;
+    else if (e.state !== 'walk') f.phase = 0;
+    const crouch = e.state === 'windup';
+    const sh = ENEMY.shooter;
+    const recoil = e.kind === 'shooter' && e.state === 'walk' && e.cool > sh.cooldown - 0.12;
+    const ax = Math.sign(e.aimX - e.x);
+    const ay = Math.sign(e.aimY - e.y);
+    return {
+      hound: {
+        mirror: e.dirX < 0,
+        frame: Math.floor(f.phase) & 3,
+        crouch,
+        stretch: e.state === 'lunge',
+        dazed: e.state === 'stun',
+        jitter: crouch && Math.floor(this.clock * 30) % 2 === 0 ? 1 : 0,
+      },
+      marker: {
+        hover: e.state === 'stun' ? 0 : Math.round(Math.sin(this.clock * 3 + e.id * 1.7) * 0.75),
+        charge: e.kind === 'shooter' && crouch ? 1 - Math.max(0, e.t) / sh.windup : 0,
+        recoilX: recoil ? -ax : 0,
+        recoilY: recoil ? -ay : 0,
+        tilt: e.state === 'stun' ? 1 : 0,
+      },
+    };
+  }
+
+  /** 적 스프라이트(환원으로 튕겨 오른 동안은 90°씩 굴러 넘어진다) */
+  private paintFoe(e: Enemy, x: number, y: number, pose: FoePose, color: string, haloPts: [number, number][] | null): void {
+    const ctx = this.ctx;
+    const tumble = e.state === 'launched' ? Math.floor(this.clock / 0.07) % 4 : 0;
+    if (tumble) {
+      ctx.save();
+      ctx.translate(x, y - 4);
+      ctx.rotate((tumble * Math.PI) / 2);
+      ctx.translate(-x, -(y - 4));
+    }
+    if (haloPts) {
+      const a0 = ctx.globalAlpha;
+      ctx.fillStyle = '#03040a';
+      ctx.globalAlpha = a0 * 0.9;
+      for (const [dx, dy] of haloPts) ctx.fillRect(x + dx, y + dy, 1, 1);
+      ctx.globalAlpha = a0;
+    }
+    if (e.kind === 'chaser') drawHound(ctx, x, y, pose.hound, color);
+    else drawMarker(ctx, x, y, pose.marker, color);
+    if (tumble) ctx.restore();
+  }
+
+  private foeMask(e: Enemy, pose: FoePose, kind: 'halo' | 'outline'): [number, number][] {
+    const fn = kind === 'halo' ? this.halo.bind(this) : this.outline.bind(this);
+    return e.kind === 'chaser'
+      ? fn(houndKey(pose.hound), (g, hx, hy) => drawHound(g, hx, hy, pose.hound, '#fff'))
+      : fn(markerKey(pose.marker), (g, hx, hy) => drawMarker(g, hx, hy, { ...pose.marker, charge: 0 }, '#fff'));
+  }
+
   private drawEnemy(world: World, e: Enemy): void {
     const ctx = this.ctx;
     const t = world.terrain;
@@ -523,9 +753,14 @@ export class Renderer {
     const y = sy(e.y, e.z);
     if (e.state === 'dead') {
       if (e.deathCause !== 'abyss') return;
-      ctx.globalAlpha = Math.max(0, 1 - e.deadT / 0.8);
+      // 절대 심연으로 떨어지는 적: 붉게 바래며 사라진다
+      const k = Math.min(1, e.deadT / 0.8);
+      ctx.globalAlpha = Math.max(0, 1 - k);
+      this.paintFoe(e, x, y, this.foePose(e), k > 0.3 ? '#5b1020' : e.kind === 'chaser' ? CHASER : SHOOTER, null);
+      ctx.globalAlpha = 1;
+      return;
     }
-    if (e.state !== 'dead') this.groundShadow(t, e.x, e.y, e.z);
+    this.groundShadow(t, e.x, e.y, e.z);
     if (e.state === 'spawn') {
       const k = 1 - Math.max(0, e.t) / 0.9;
       ctx.fillStyle = SHOOTER;
@@ -533,15 +768,8 @@ export class Renderer {
       ctx.globalAlpha = 1;
       return;
     }
-    const white = e.flash > 0 || (e.state === 'windup' && Math.floor(this.clock * 16) % 2 === 0);
-    const mirror = e.dirX < 0;
-    // 어두운 테두리: 형광 등고선 위에서도 몸이 떨어져 보이게
-    const halo = e.kind === 'chaser' ? this.halo(`hound${mirror ? 1 : 0}`, (g, hx, hy) => drawHound(g, hx, hy, mirror, '#fff')) : this.halo('marker', (g, hx, hy) => drawMarker(g, hx, hy, '#fff', false));
-    const a0 = ctx.globalAlpha;
-    ctx.fillStyle = '#03040a';
-    ctx.globalAlpha = a0 * 0.9;
-    for (const [dx, dy] of halo) ctx.fillRect(x + dx, y + dy, 1, 1);
-    ctx.globalAlpha = a0;
+    const pose = this.foePose(e);
+    const white = e.flash > 0 || (e.state === 'windup' && e.kind === 'chaser' && Math.floor(this.clock * 16) % 2 === 0);
     if (e.kind === 'chaser' && e.state === 'windup') {
       // 돌진 예고: 돌진할 길이 끝까지 차오르는 붉은 점선(다 차면 곧 돌진)
       const k = Math.min(1, (1 - Math.max(0, e.t) / ENEMY.chaser.windup) * 1.25);
@@ -549,26 +777,24 @@ export class Renderer {
       ctx.fillStyle = k >= 1 ? '#ffffff' : CHASER;
       for (let d = 5; d < len; d += 3) ctx.fillRect(Math.round(e.x + e.dirX * d), sy(e.y + e.dirY * d, e.z) - 3, 1, 1);
     }
-    if (e.kind === 'chaser') {
-      if (e.state === 'lunge') {
-        const a = ctx.globalAlpha;
-        ctx.globalAlpha = a * 0.4;
-        drawHound(ctx, x - Math.round(e.dirX * 4), y - Math.round(e.dirY * 4), mirror, CHASER);
-        ctx.globalAlpha = a;
+    if (e.kind === 'chaser' && e.state === 'lunge') {
+      // 돌진 잔상 두 겹
+      for (const [o, al] of [[8, 0.2], [4, 0.4]] as const) {
+        ctx.globalAlpha = al;
+        drawHound(ctx, x - Math.round(e.dirX * o), y - Math.round(e.dirY * o), pose.hound, CHASER);
       }
-      drawHound(ctx, x, y, mirror, white ? '#ffffff' : CHASER);
-    } else {
-      if (e.state === 'windup') {
-        // 조준선: 점선. 발사 직전 0.2초는 경고 적색
-        ctx.fillStyle = e.t < 0.2 ? '#ff2d55' : SHOOTER;
-        const dx = e.aimX - e.x;
-        const dy = e.aimY - e.y;
-        const d = Math.hypot(dx, dy) || 1;
-        for (let s = 6; s < d; s += 4) ctx.fillRect(Math.round(e.x + (dx / d) * s), Math.round(sy(e.y + (dy / d) * s, e.z + 0.5) - 4), 1, 1);
-      }
-      drawMarker(ctx, x, y, white ? '#ffffff' : SHOOTER, e.state === 'windup');
+      ctx.globalAlpha = 1;
     }
-    if (e.exposedT > 0 && e.state !== 'dead') {
+    if (e.kind === 'shooter' && e.state === 'windup') {
+      // 조준선: 점선. 발사 직전 0.2초는 경고 적색
+      ctx.fillStyle = e.t < 0.2 ? '#ff2d55' : SHOOTER;
+      const dx = e.aimX - e.x;
+      const dy = e.aimY - e.y;
+      const d = Math.hypot(dx, dy) || 1;
+      for (let s = 6; s < d; s += 4) ctx.fillRect(Math.round(e.x + (dx / d) * s), Math.round(sy(e.y + (dy / d) * s, e.z + 0.5) - 4), 1, 1);
+    }
+    this.paintFoe(e, x, y, pose, white ? '#ffffff' : e.kind === 'chaser' ? CHASER : SHOOTER, this.foeMask(e, pose, 'halo'));
+    if (e.exposedT > 0) {
       // 무방비 표식: 머리 위 깜빡이는 마름모(지금 베면 공중 추가타)
       ctx.fillStyle = Math.floor(this.clock * 14) % 2 === 0 ? '#ffffff' : '#19f5c8';
       ctx.fillRect(x, y - 17, 1, 1);
@@ -582,7 +808,7 @@ export class Renderer {
       ctx.fillRect(x + Math.round(Math.cos(a + Math.PI) * 3), y - 11, 1, 1);
     }
     const max = ENEMY[e.kind].hp;
-    if (e.hp < max && e.state !== 'dead') {
+    if (e.hp < max) {
       for (let k = 0; k < max; k++) {
         ctx.fillStyle = k < e.hp ? '#ffffff' : '#444a66';
         ctx.fillRect(x - max + k * 2, y - 13, 1, 1);
@@ -631,17 +857,13 @@ export class Renderer {
       for (const [dx, dy] of pts) if (terrainCoversAfterRow(t, x + dx, y + dy, row)) ctx.fillRect(x + dx, y + dy, 1, 1);
     };
     for (const e of world.enemies) {
-      if (e.state === 'dead' || e.state === 'spawn') continue;
-      const mirror = e.dirX < 0;
-      const pts =
-        e.kind === 'chaser'
-          ? this.outline(`hound${mirror ? 1 : 0}`, (g, x, y) => drawHound(g, x, y, mirror, '#fff'))
-          : this.outline('marker', (g, x, y) => drawMarker(g, x, y, '#fff', false));
-      trace(Math.round(e.x), sy(e.y, e.z), rowOf(e.y), pts, e.kind === 'chaser' ? CHASER : SHOOTER);
+      if (e.state === 'dead' || e.state === 'spawn' || e.state === 'launched') continue;
+      trace(Math.round(e.x), sy(e.y, e.z), rowOf(e.y), this.foeMask(e, this.foePose(e), 'outline'), e.kind === 'chaser' ? CHASER : SHOOTER);
     }
     const p = world.player;
-    const flip = p.facingX < 0;
-    trace(Math.round(p.x), sy(p.y, p.z), rowOf(p.y), this.outline(`surveyor${flip ? 1 : 0}`, (g, x, y) => drawSurveyor(g, x, y, flip, '#fff', '#fff')), PLAYER_OUTLINE);
+    const pose = this.lastKain;
+    if (!pose || world.mode === 'over') return;
+    trace(Math.round(p.x), sy(p.y, p.z), rowOf(p.y), this.outline(kainKey(pose), (g, x, y) => drawKain(g, x, y, pose, '#fff', '#fff')), PLAYER_OUTLINE);
   }
 
   /** 스프라이트 바깥에 맞닿은 빈 픽셀(1px 바깥 테두리)을 구해 둔다 */
@@ -706,6 +928,73 @@ export class Renderer {
     ctx.fillRect(x, y - 6, 1, 1);
   }
 
+  /** 구역마다 다른 공기: 균열 지대는 심연에서 오르는 불티, 접힘 협곡은 동쪽으로 부는 먼지, 환원 구역은 떠오르는 시안 입자 */
+  setMood(m: Mood): void {
+    this.mood = m;
+    this.motes = [];
+    const n = m === 'plain' ? 18 : 34;
+    for (let i = 0; i < n; i++) {
+      const r = (k: number) => ((Math.sin(i * 12.9898 + k * 78.233) * 43758.5453) % 1 + 1) % 1;
+      const speed = 0.5 + r(3);
+      const [vx, vy] = m === 'canyon' ? [26 * speed, 2 * (r(4) - 0.5)] : m === 'rift' ? [3 * (r(4) - 0.5), -7 * speed] : m === 'restore' ? [2 * (r(4) - 0.5), -5 * speed] : [2, -1.5 * speed];
+      this.motes.push({ x: r(1) * VIEW_W, y: r(2) * VIEW_H, vx, vy, ph: r(5) * 6 });
+    }
+  }
+
+  private drawMotes(dt: number): void {
+    const ctx = this.ctx;
+    const col = this.mood === 'rift' ? '#ff7a45' : this.mood === 'canyon' ? '#9aa6e0' : this.mood === 'restore' ? '#19f5c8' : '#7f8bb8';
+    ctx.fillStyle = col;
+    for (const m of this.motes) {
+      m.x += m.vx * dt;
+      m.y += m.vy * dt + Math.sin(this.clock * 1.3 + m.ph) * 0.05;
+      if (m.x > VIEW_W + 4) m.x -= VIEW_W + 8;
+      if (m.x < -4) m.x += VIEW_W + 8;
+      if (m.y < 14) m.y += VIEW_H - 14;
+      if (m.y > VIEW_H) m.y -= VIEW_H - 14;
+      const tw = 0.5 + 0.5 * Math.sin(this.clock * 2.1 + m.ph);
+      ctx.globalAlpha = 0.12 + 0.28 * tw;
+      if (this.mood === 'canyon') ctx.fillRect(Math.round(m.x) - 2, Math.round(m.y), 3, 1);
+      else ctx.fillRect(Math.round(m.x), Math.round(m.y), 1, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** 지평선 위 원점 타워(Benchmark Zero)의 점멸등. 탑 실루엣은 배경에 */
+  private drawBeaconLight(): void {
+    const on = Math.sin(this.clock * 2.2) > 0.2;
+    const ctx = this.ctx;
+    ctx.fillStyle = '#ff2d55';
+    ctx.globalAlpha = on ? 0.9 : 0.25;
+    ctx.fillRect(TOWER_X, 1, 1, 1);
+    ctx.globalAlpha = on ? 0.25 : 0.08;
+    ctx.fillRect(TOWER_X - 1, 0, 3, 3);
+    ctx.globalAlpha = 1;
+  }
+
+  /** 공중 추가타의 멈춘 한 장: 장면을 어둡게 누르고 맞은 적을 흰 실루엣으로 다시 그린다. 섬광(drawFx)은 그 위에 */
+  private drawImpact(world: World, dt: number): void {
+    if (this.impactT <= 0 || !this.impactAt) return;
+    this.impactT = Math.max(0, this.impactT - dt);
+    const ctx = this.ctx;
+    const k = this.impactT / IMPACT_SEC;
+    ctx.fillStyle = '#02030a';
+    ctx.globalAlpha = 0.55 * Math.min(1, k * 1.6);
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.globalAlpha = 1;
+    const at = this.impactAt;
+    let best: Enemy | null = null;
+    let bd = 12;
+    for (const e of world.enemies) {
+      const d = Math.hypot(e.x - at.x, e.y - at.y);
+      if (d < bd) {
+        bd = d;
+        best = e;
+      }
+    }
+    if (best) this.paintFoe(best, Math.round(best.x), sy(best.y, best.z), this.foePose(best), '#ffffff', this.foeMask(best, this.foePose(best), 'halo'));
+  }
+
   /** 타이틀: 4초마다 위에서 아래로 지나가는 시안 주사선과 옅은 잔상 */
   private drawScan(): void {
     const ctx = this.ctx;
@@ -764,7 +1053,14 @@ export class Renderer {
     this.streaks = [];
     this.marks = [];
     this.beams = [];
+    this.later = [];
     this.introT = 0;
+    this.foes.clear();
+    this.impactT = 0;
+    this.flashMute.fill(-Infinity);
+    this.kain.px = NaN;
+    this.kain.slashT = 9;
+    this.kain.overT = 0;
     this.shakeT = this.shakeAmp = this.shakeDur = 0;
     this.punch = this.punchT = this.dashOut = 0;
     this.hurtT = 0;
@@ -818,6 +1114,11 @@ export class Renderer {
 
   private drawFx(dt: number): void {
     const ctx = this.ctx;
+    for (const l of this.later) {
+      l.t -= dt;
+      if (l.t <= 0) l.run();
+    }
+    this.later = this.later.filter((l) => l.t > 0);
     for (const m of this.marks) {
       m.t += dt;
       ctx.globalAlpha = Math.max(0, 0.8 * (1 - m.t / 1.4));
@@ -907,63 +1208,21 @@ export class Renderer {
   }
 }
 
-/** 검은 측량사: 넓은 챙 모자, 검은 외투, 형광 윤곽. 발끝 (x,y) 기준 */
-function drawSurveyor(ctx: CanvasRenderingContext2D, x: number, y: number, mirror: boolean, rim: string, body: string): void {
-  const parts: [number, number, number, number][] = [
-    [-2, -2, 1, 2],
-    [1, -2, 1, 2],
-    [-2, -7, 4, 5],
-    [-3, -5, 1, 3], // 외투 자락
-    [-1, -9, 3, 2],
-    [-4, -10, 8, 1], // 모자 챙
-    [-2, -12, 4, 2],
-  ];
-  const rect = (rx: number, ry: number, w: number, h: number) => {
-    const xx = mirror ? x - rx - w : x + rx;
-    ctx.fillRect(xx, y + ry, w, h);
-  };
-  ctx.fillStyle = rim;
-  for (const [rx, ry, w, h] of parts) rect(rx - 1, ry - 1, w + 2, h + 2);
-  ctx.fillStyle = body;
-  for (const [rx, ry, w, h] of parts) rect(rx, ry, w, h);
-  ctx.fillStyle = '#19f5c8';
-  rect(1, -9, 1, 1); // 눈
-  // 등에 멘 측량 막대
-  const a = ctx.globalAlpha;
-  ctx.globalAlpha = a * 0.7;
-  rect(-5, -13, 1, 11);
-  ctx.globalAlpha = a;
-}
+/** 원점 타워가 지평선에 서 있는 x(내부 화면 px) */
+const TOWER_X = 240;
 
-/** 주름 사냥개(돌진형) */
-function drawHound(ctx: CanvasRenderingContext2D, x: number, y: number, mirror: boolean, color: string): void {
-  const rect = (rx: number, ry: number, w: number, h: number) => ctx.fillRect(mirror ? x - rx - w : x + rx, y + ry, w, h);
-  ctx.fillStyle = '#12020a';
-  rect(-4, -6, 9, 6);
-  rect(1, -8, 5, 4);
-  ctx.fillStyle = color;
-  rect(-3, -5, 7, 3);
-  rect(2, -7, 3, 3);
-  rect(-3, -2, 1, 2);
-  rect(2, -2, 1, 2);
-  ctx.fillStyle = '#12020a';
-  rect(-1, -5, 1, 2);
-  rect(1, -5, 1, 2);
-  ctx.fillStyle = '#ffffff';
-  rect(4, -6, 1, 1);
-}
-
-/** 삼각점(사격형): 측량 기준점 모양의 포대 */
-function drawMarker(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, aiming: boolean): void {
-  ctx.fillStyle = '#0c0216';
-  ctx.fillRect(x - 5, y - 10, 11, 7);
-  ctx.fillRect(x - 1, y - 3, 3, 3);
-  ctx.fillStyle = color;
-  for (let r = 0; r < 5; r++) ctx.fillRect(x - r, y - 9 + r, r * 2 + 1, 1);
-  ctx.fillStyle = '#3d1160';
-  ctx.fillRect(x, y - 3, 1, 3);
-  ctx.fillStyle = aiming ? '#ff2d55' : '#ffffff';
-  ctx.fillRect(x, y - 6, 1, 1);
+/** 가장자리를 눌러 시선을 가운데로 모으는 비네트(한 번 만들어 둔다) */
+function makeVignette(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = VIEW_W;
+  c.height = VIEW_H;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.55, VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.64);
+  grad.addColorStop(0, 'rgba(2,3,10,0)');
+  grad.addColorStop(1, 'rgba(2,3,10,0.3)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, VIEW_W, VIEW_H);
+  return c;
 }
 
 /** 두 #rrggbb 색을 t(0~1)만큼 섞는다 */
@@ -998,6 +1257,21 @@ function makeBackground(): HTMLCanvasElement {
   const g = c.getContext('2d')!;
   g.fillStyle = '#04050a';
   g.fillRect(0, 0, VIEW_W, VIEW_H);
+  // 먼 지평선: 접힌 단애의 실루엣 두 겹과 세계 중심의 원점 타워(Benchmark Zero)
+  for (let x = 0; x < VIEW_W; x++) {
+    const far = 7 + Math.round(2.5 * Math.sin(x * 0.031) + 1.5 * Math.sin(x * 0.097 + 1.3));
+    const near = 10 + Math.round(1.5 * Math.sin(x * 0.053 + 2.1) + Math.sin(x * 0.17));
+    g.fillStyle = '#0a0d1d';
+    g.fillRect(x, far, 1, 13 - far);
+    g.fillStyle = '#0e1226';
+    g.fillRect(x, near, 1, 13 - near);
+  }
+  g.fillStyle = '#1a2142';
+  g.fillRect(TOWER_X, 2, 1, 11);
+  g.fillRect(TOWER_X - 1, 6, 3, 7);
+  g.fillRect(TOWER_X - 2, 10, 5, 3);
+  g.fillStyle = '#2a3463';
+  g.fillRect(TOWER_X - 3, 4, 7, 1);
   // 지도 윗변 자: 5칸(30px)마다 큰 눈금, 1칸마다 작은 눈금 — 지면의 측량 눈금(+)과 열이 맞는다
   g.fillStyle = '#121833';
   g.fillRect(0, 13, VIEW_W, 1);

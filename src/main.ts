@@ -4,7 +4,7 @@ import { FIXED_DT, LEVEL_PX, ORIGIN_Y, PLAYER, VIEW_H, VIEW_W, tune, type Tune }
 import { Controls } from './input';
 import { journeyTotals, newZoneState, parseZoneParam, surveyGrade, zoneResult, ZONES, zoneStatus, zoneTick, type ZoneResult } from './journey';
 import { DEFAULT_SEED, SCENARIOS } from './maps';
-import { Renderer } from './render';
+import { Renderer, type Mood } from './render';
 import { emptyInput, World, type GameEvent } from './world';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -42,6 +42,9 @@ let phase: Phase = 'play';
 let zstate = newZoneState();
 /** 구역별 결과. 같은 구역을 다시 깨면 덮어써서 최종 집계에 두 번 들어가지 않는다 */
 let results: (ZoneResult | undefined)[] = [];
+
+/** 구역별 공기(render.ts Mood) */
+const ZONE_MOOD: Record<string, Mood> = { rift: 'rift', canyon: 'canyon', restore: 'restore' };
 
 function makeWorld(): World {
   return mode === 'journey' ? new World(null, seed, ZONES[zoneIndex].build()) : new World(scenario, seed);
@@ -119,6 +122,10 @@ function start(asWaves = false): void {
   } else if (mode === 'journey') {
     enterZone(zoneIndex);
   }
+  if (mode !== 'journey') {
+    renderer.setMood('plain');
+    sfx.ambience('plain');
+  }
   // 측량 신호가 지도를 드러내며 시작(구역 진입·재시작과 같은 연출)
   renderer.resetFx();
   last = performance.now();
@@ -137,14 +144,19 @@ function enterZone(i: number): void {
   zoneClearEl.classList.add('hidden');
   journeyClearEl.classList.add('hidden');
   const z = ZONES[i];
+  renderer.setMood(ZONE_MOOD[z.id] ?? 'plain');
+  sfx.ambience(ZONE_MOOD[z.id] ?? 'plain');
   banner.innerHTML = `<b>구역 ${i + 1} — ${z.name}</b><br>${z.goal}`;
   banner.classList.remove('hidden', 'fade');
   bannerT = 3;
 }
 let bannerT = 0;
+/** 쓰러진 시각(rAF 시각). 결과 화면을 잠시 늦게 띄운다 */
+let overAt = -1;
 
 function resetTransient(): void {
   over.classList.add('hidden');
+  overAt = -1;
   setPaused(false);
   feed.length = 0;
   controls.clear();
@@ -403,6 +415,7 @@ function restoreWarnTick(): void {
 }
 
 function handleEvents(events: GameEvent[]): void {
+  const airNow = events.some((e) => e.type === 'airHit');
   // 한 번의 환원으로 여러 적이 떠도 알림은 하나
   if (events.some((e) => e.type === 'launch')) {
     sfx.launch();
@@ -411,6 +424,11 @@ function handleEvents(events: GameEvent[]): void {
   for (const ev of events) {
     switch (ev.type) {
       case 'slash':
+        // 공중 추가타가 같은 칼질이면 그 소리가 앞에 서고, 다시 베인 땅의 소리는 한 박자 뒤 작게
+        if (airNow) {
+          if (ev.cells.length) sfx.collapse(ev.cells.length * 0.4, 0.08);
+          break;
+        }
         sfx.slash(ev.crossings.reduce((m, c) => Math.max(m, c.level), -1));
         if (ev.cells.length) sfx.collapse(ev.cells.length);
         break;
@@ -496,11 +514,21 @@ function frame(now: number): void {
       }
     }
     if (n === 6) acc = 0;
-    if (world.isOver()) showOver();
+    // 쓰러지는 모습을 먼저 보여 주고 결과는 0.7초 뒤(R은 그사이에도 바로 된다)
+    if (world.isOver()) {
+      overAt = now;
+      sfx.down();
+    }
   } else if (started) {
     // 정지 중에도 조준은 갱신
     controls.fill(input, world.player, world.enemies, world.terrain);
     input.cut = input.dash = input.dashToAim = false;
+  }
+  // 공기 크기: 플레이 중 1, 일시정지 0.4, 쓰러짐·돌파 화면 0.25
+  sfx.setAmbLevel(!started ? 0.6 : world.isOver() || phase !== 'play' ? 0.25 : paused ? 0.4 : 1);
+  if (overAt >= 0 && now - overAt > 700 && world.isOver()) {
+    overAt = -1;
+    showOver();
   }
   const events = world.events;
   world.events = [];
