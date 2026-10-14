@@ -28,6 +28,7 @@ if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
 const sfx = new Sfx();
 // 타이틀 동안에는 전투 HUD를 숨긴다(타이틀 뒤로 지도만 보이게)
 document.body.classList.add('pre');
+renderer.titleScan = true;
 const input = emptyInput();
 
 // 플레이 방식: 첫 여정(기본) · 무한 웨이브 · 실험 시나리오(?scenario=)
@@ -111,6 +112,7 @@ function start(asWaves = false): void {
   started = true;
   title.classList.add('hidden');
   document.body.classList.remove('pre');
+  renderer.titleScan = false;
   if (asWaves) {
     mode = 'waves';
     world = makeWorld();

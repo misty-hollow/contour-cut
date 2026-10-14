@@ -115,6 +115,8 @@ export class Renderer {
   private marks: Mark[] = [];
   private beams: { x: number; y: number; t: number }[] = [];
   private introT = INTRO_SEC;
+  /** 타이틀 화면: 지도를 위에서 아래로 훑는 측량 주사선 */
+  titleScan = false;
   private shakeT = 0;
   private shakeDur = 0;
   private shakeAmp = 0;
@@ -306,6 +308,7 @@ export class Renderer {
     this.drawBolts(world);
     if (aim && world.mode === 'play') this.drawAim(world, aim);
     this.drawFx(dt);
+    if (this.titleScan) this.drawScan();
     this.drawIntro(world, dt);
     this.present(world, dt);
   }
@@ -701,6 +704,20 @@ export class Renderer {
     for (let r = 0; r < 4; r++) ctx.fillRect(x - r, y - 8 + r, r * 2 + 1, 1);
     ctx.fillStyle = '#000000';
     ctx.fillRect(x, y - 6, 1, 1);
+  }
+
+  /** 타이틀: 4초마다 위에서 아래로 지나가는 시안 주사선과 옅은 잔상 */
+  private drawScan(): void {
+    const ctx = this.ctx;
+    const y = Math.round(((this.clock / 4) % 1) * (VIEW_H + 30)) - 10;
+    ctx.fillStyle = '#19f5c8';
+    for (let k = 0; k < 10; k++) {
+      ctx.globalAlpha = 0.16 * (1 - k / 10);
+      ctx.fillRect(0, y - k, VIEW_W, 1);
+    }
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(0, y, VIEW_W, 1);
+    ctx.globalAlpha = 1;
   }
 
   /** 구역 시작·재시작: 플레이어에서 퍼지는 측량 신호 고리 안쪽만 지도가 보인다(INTRO_SEC 동안) */
