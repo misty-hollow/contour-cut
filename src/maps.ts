@@ -17,6 +17,8 @@ export interface Setup {
   player: { cx: number; cy: number };
   enemies: EnemySpec[];
   waves: boolean;
+  /** 돌파형 구역의 출구 표지(칸 좌표·반경). 첫 여정 구역 2 */
+  exit?: { cx: number; cy: number; r: number };
 }
 
 export const DEFAULT_SEED = 7;

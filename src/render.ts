@@ -246,6 +246,7 @@ export class Renderer {
       for (const f of rows[cy]) f();
     }
 
+    if (world.setup.exit) this.drawExit(world);
     this.drawBolts(world);
     if (aim && world.mode === 'play') this.drawAim(world, aim);
     this.drawFx(dt);
@@ -500,6 +501,40 @@ export class Renderer {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(x - 1, y - 1, 2, 2);
     }
+  }
+
+  /** 출구 표지: 바닥에 퍼지는 측량 고리 + 위로 솟는 빛기둥과 삼각점 */
+  private drawExit(world: World): void {
+    const ctx = this.ctx;
+    const e = world.setup.exit!;
+    const x = Math.round((e.cx + 0.5) * CELL);
+    const gz = Math.max(0, world.terrain.get(e.cx, e.cy));
+    const y = sy((e.cy + 0.5) * CELL, gz);
+    const k = (this.clock * 0.8) % 1;
+    ctx.globalAlpha = 0.9;
+    pixCircle(ctx, x, y, e.r * CELL, '#e8ff3a');
+    ctx.globalAlpha = 1 - k;
+    pixCircle(ctx, x, y, 3 + k * e.r * CELL, '#e8ff3a');
+    ctx.globalAlpha = 0.35 + 0.25 * Math.sin(this.clock * 5);
+    ctx.fillStyle = '#e8ff3a';
+    ctx.fillRect(x, y - 40, 1, 40);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#e8ff3a';
+    for (let r = 0; r < 4; r++) ctx.fillRect(x - r, y - 8 + r, r * 2 + 1, 1);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(x, y - 6, 1, 1);
+  }
+
+  /** 구역이 바뀔 때 이전 구역의 연출을 지운다 */
+  resetFx(): void {
+    this.particles = [];
+    this.slashes = [];
+    this.rings = [];
+    this.ghosts = [];
+    this.shakeT = this.shakeAmp = this.shakeDur = 0;
+    this.punch = this.punchT = this.dashOut = 0;
+    this.hurtT = 0;
+    this.restoredAt.fill(-Infinity);
   }
 
   /** 조준: 칼날이 닿을 선과, 그 선이 벨 등고선 위치를 미리 보여 준다 */

@@ -12,6 +12,7 @@
         <div id="hud-tl" class="hud-box">
           <div id="hud-hp" data-testid="hud-hp"></div>
           <div id="hud-wave" data-testid="hud-wave"></div>
+          <div id="hud-goal" data-testid="hud-goal"></div>
         </div>
         <div id="hud-tr" class="hud-box" data-testid="hud-kills">
           <div>지형 처치 <b id="k-terrain">0</b> · 공중 <b id="k-air">0</b> · 칼날 <b id="k-blade">0</b></div>
@@ -23,13 +24,15 @@
         </div>
         <div id="hud-br" class="hud-box">H 조작 · T 튜닝 · M 소리</div>
         <div id="feed" data-testid="feed"></div>
+        <div id="zone-banner" class="hidden" data-testid="zone-banner"></div>
       </div>
       <div id="title" class="overlay" data-testid="title">
         <h1>CONTOUR CUT</h1>
         <h2>등고선 절단기</h2>
         <p class="lore">대접힘 이후 세계는 등고선 단위로 찢겨 나갔다. 검은 측량사 카인은 원점 타워로 향한다.</p>
         <p class="lead">지도의 등고선을 베어 땅을 무너뜨려라. 적을 베기보다 지형을 베는 편이 강하다.</p>
-        <button id="start" data-testid="start" type="button">클릭하여 측량 시작</button>
+        <button id="start" data-testid="start" type="button">첫 여정 시작</button>
+        <button id="start-waves" class="secondary" data-testid="start-waves" type="button">무한 웨이브</button>
         <p id="scenario-note" class="note"></p>
       </div>
       <div id="help" class="overlay panel hidden" data-testid="help">
@@ -40,7 +43,8 @@
           <dt>왼쪽 클릭 / J</dt><dd>측량 절단: 등고선을 벤다. 벤 선 안쪽 고지대가 내려앉는다</dd>
           <dt>Space / Shift / K</dt><dd>대시(이동 방향, 없으면 조준 방향) · 무적</dd>
           <dt>오른쪽 클릭</dt><dd>조준 방향으로 대시</dd>
-          <dt>R · N</dt><dd>다시 시작 · 새 지도</dd>
+          <dt>R · N</dt><dd>다시 시작(첫 여정에서는 이 구역 다시) · 새 지도(무한 웨이브)</dd>
+          <dt>Enter</dt><dd>구역 돌파 화면에서 다음 구역으로</dd>
           <dt>P / Esc</dt><dd>일시정지</dd>
           <dt>H · T · M</dt><dd>이 도움말 · 튜닝 패널 · 소리 끄기</dd>
         </dl>
@@ -58,7 +62,19 @@
       <div id="over" class="overlay hidden" data-testid="over">
         <h2>측량 중단</h2>
         <p id="over-stats"></p>
-        <p class="note">R 다시 시작 · N 새 지도</p>
+        <p id="over-note" class="note">R 다시 시작 · N 새 지도</p>
+      </div>
+      <div id="zone-clear" class="overlay hidden" data-testid="zone-clear">
+        <h2 id="zone-clear-title">구역 돌파</h2>
+        <p id="zone-clear-stats"></p>
+        <p id="zone-clear-next" class="note"></p>
+        <button id="next-zone" data-testid="next-zone" type="button">다음 구역으로 (Enter)</button>
+      </div>
+      <div id="journey-clear" class="overlay hidden" data-testid="journey-clear">
+        <h2>첫 여정 완료</h2>
+        <p class="lore">세 구역의 등고선을 넘었다. 원점 타워로 가는 길은 아직 멀다.</p>
+        <p id="journey-stats"></p>
+        <p class="note">R 여정 처음부터 다시</p>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

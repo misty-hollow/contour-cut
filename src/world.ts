@@ -155,8 +155,9 @@ export class World {
   private flowKey = '';
   private waveTimer = 1.2;
 
-  constructor(scenario: string | null, seed: number) {
-    this.setup = buildSetup(scenario, seed);
+  /** setup을 주면 그 배치로 시작한다(첫 여정의 구역). 없으면 시나리오 이름·시드로 만든다 */
+  constructor(scenario: string | null, seed: number, setup?: Setup) {
+    this.setup = setup ?? buildSetup(scenario, seed);
     this.rng = makeRng(seed * 7919 + 13);
     this.terrain = new Terrain(GRID_W, GRID_H, this.setup.heights);
     const px = cellCenter(this.setup.player.cx);

@@ -185,8 +185,62 @@ body {
   cursor: pointer;
   box-shadow: calc(2px * var(--s)) calc(2px * var(--s)) 0 var(--magenta);
 }
-#start:hover {
+#start:hover,
+#next-zone:hover {
   background: #fff;
+}
+#start.secondary,
+#start-waves {
+  margin-top: calc(4px * var(--s));
+  font: inherit;
+  font-size: calc(5.5px * var(--s));
+  padding: calc(2px * var(--s)) calc(8px * var(--s));
+  color: var(--cyan);
+  background: transparent;
+  border: calc(0.5px * var(--s)) solid var(--cyan);
+  cursor: pointer;
+}
+#next-zone {
+  margin-top: calc(6px * var(--s));
+  font: inherit;
+  font-size: calc(7px * var(--s));
+  padding: calc(3px * var(--s)) calc(10px * var(--s));
+  color: #000;
+  background: var(--cyan);
+  border: 0;
+  cursor: pointer;
+  box-shadow: calc(2px * var(--s)) calc(2px * var(--s)) 0 var(--magenta);
+}
+#hud-goal {
+  color: #e8ff3a;
+}
+#zone-banner {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  transform: translateX(-50%);
+  padding: calc(3px * var(--s)) calc(10px * var(--s));
+  background: rgba(2, 3, 10, 0.7);
+  border-top: calc(0.5px * var(--s)) solid var(--cyan);
+  border-bottom: calc(0.5px * var(--s)) solid var(--cyan);
+  text-align: center;
+  font-size: calc(6px * var(--s));
+  white-space: nowrap;
+  transition: opacity 0.6s;
+}
+#zone-banner b {
+  color: var(--cyan);
+  font-size: calc(8px * var(--s));
+  letter-spacing: calc(1px * var(--s));
+}
+#zone-banner.fade {
+  opacity: 0;
+}
+#zone-clear h2,
+#journey-clear h2 {
+  color: var(--cyan);
+  font-size: calc(13px * var(--s));
+  margin: 0 0 calc(4px * var(--s));
 }
 
 .panel {
