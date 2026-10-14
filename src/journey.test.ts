@@ -1,26 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import { CELL, FIXED_DT, GRID_H, GRID_W, tune } from './config';
 import { buildFlowField } from './flowfield';
-import { inExit, journeyTotals, parseZoneParam, ZONE1_MESA, ZONE1_PLATEAUS, ZONE2_EXIT, ZONE3_HILLS, ZONES, zoneResult, zoneStatus, zoneTick } from './journey';
+import {
+  BEAT_GAP,
+  inExit,
+  journeyTotals,
+  newZoneState,
+  parseZoneParam,
+  surveyGrade,
+  ZONE1_BEATS,
+  ZONE1_MESA,
+  ZONE1_P1,
+  ZONE1_P2,
+  ZONE1_RING,
+  ZONE2_EXIT,
+  ZONE3_HILLS,
+  ZONES,
+  zoneResult,
+  zoneStatus,
+  zoneTick,
+  type ZoneState,
+} from './journey';
 import { cellCenter } from './maps';
 import { isAbyss, stepKind, Terrain } from './terrain';
 import { emptyInput, World, type Input } from './world';
 
 const c = cellCenter;
 
-function step(w: World, zi: number, input: Input = emptyInput()): void {
+function step(w: World, zi: number, input: Input = emptyInput(), st?: ZoneState): void {
   w.step(FIXED_DT, input);
-  zoneTick(ZONES[zi], w);
+  zoneTick(ZONES[zi], w, st);
 }
-function run(w: World, zi: number, sec: number, input: Input = emptyInput()): void {
-  for (let k = 0; k < Math.round(sec / FIXED_DT); k++) step(w, zi, input);
+function run(w: World, zi: number, sec: number, input: Input = emptyInput(), st?: ZoneState): void {
+  for (let k = 0; k < Math.round(sec / FIXED_DT); k++) step(w, zi, input, st);
 }
-function cutToward(w: World, zi: number, ax: number, ay: number): void {
+function cutToward(w: World, zi: number, ax: number, ay: number, st?: ZoneState): void {
   const inp = emptyInput();
   inp.aimX = ax;
   inp.aimY = ay;
   inp.cut = true;
-  step(w, zi, inp);
+  step(w, zi, inp, st);
 }
 const zoneWorld = (i: number) => new World(null, 7, ZONES[i].build());
 
@@ -70,39 +89,131 @@ describe('첫 여정 구역 설정', () => {
   });
 });
 
-describe('구역 1 — 균열 지대', () => {
-  it('적은 모두 걸어서 내려올 수 없는 고지대(2단 이상)에 있어 플레이어에게 길이 없다', () => {
+describe('구역 1 — 균열 지대(세 번의 측량)', () => {
+  it('측량 1: 출발점 바로 앞 대지의 적은 걸어서 내려오지 못하고(2단), 출발 자리에서 베어 닿는다', () => {
     const w = zoneWorld(0);
     const t = w.terrain;
     const [px, py] = t.cellOf(w.player.x, w.player.y);
     const dist = buildFlowField(t, px, py);
-    for (const e of w.enemies) {
-      const [ex, ey] = t.cellOf(e.x, e.y);
-      expect(dist[t.idx(ex, ey)], `적 ${e.id}`).toBe(-1);
-      expect(e.z - w.player.z).toBeGreaterThanOrEqual(2);
-    }
+    expect(w.enemies.length).toBe(1);
+    const e = w.enemies[0];
+    const [ex, ey] = t.cellOf(e.x, e.y);
+    expect(dist[t.idx(ex, ey)]).toBe(-1);
+    expect(e.z - w.player.z).toBe(2);
+    // 대지 가장자리(등고선)가 칼날 길이 안에 있다
+    const edge = (ZONE1_P1.cy + 3 + 1) * 6;
+    expect(w.player.y - edge).toBeLessThan(42);
   });
 
-  it('고지대마다 한 번씩 4번 베면 전멸해 클리어된다(지형 처치)', () => {
+  it('균열 고리: 고리 안(표고 0)에서 고리(표고 1)를 밟지 않고는 지도 밖으로 나갈 수 없다(다가오는 적은 반드시 고리를 넘는다)', () => {
     const w = zoneWorld(0);
-    const p = w.player;
-    const targets = [
-      { stand: [40, 27], aim: [40, 21] }, // 메사(사격형)
-      ...ZONE1_PLATEAUS.map((pl) => ({ stand: [pl.cx, pl.cy + 7], aim: [pl.cx, pl.cy] })),
-    ];
-    expect(ZONE1_MESA.y1).toBeLessThan(27);
-    for (const tg of targets) {
-      // 서는 자리는 준비(테스트 배치)로 옮긴다. 행동(절단)은 입력으로
-      p.x = c(tg.stand[0]);
-      p.y = c(tg.stand[1]);
-      cutToward(w, 0, c(tg.aim[0]), c(tg.aim[1]));
-      run(w, 0, 1.5);
+    const t = w.terrain;
+    const seen = new Uint8Array(t.w * t.h);
+    const q = [t.idx(ZONE1_RING.cx, ZONE1_RING.cy)];
+    seen[q[0]] = 1;
+    let escaped = false;
+    while (q.length) {
+      const i = q.pop()!;
+      const x = i % t.w;
+      const y = (i - x) / t.w;
+      if (x === 0 || y === 0 || x === t.w - 1 || y === t.h - 1) escaped = true;
+      for (const [nx, ny] of [
+        [x + 1, y],
+        [x - 1, y],
+        [x, y + 1],
+        [x, y - 1],
+      ]) {
+        if (!t.inBounds(nx, ny)) continue;
+        const j = t.idx(nx, ny);
+        if (seen[j] || t.height[j] !== 0) continue;
+        seen[j] = 1;
+        q.push(j);
+      }
     }
-    const st = zoneStatus(ZONES[0], w);
-    expect(st.label).toBe('고지대의 적 4/4');
-    expect(st.done).toBe(true);
-    expect(w.stats.kills.fall + w.stats.kills.abyss).toBe(4);
-    expect(w.stats.kills.blade).toBe(0);
+    expect(escaped).toBe(false);
+  });
+
+  it('세 단계를 지형으로 정리하면 클리어된다: 대지 → 메사·대지 → 고리를 넘는 적', () => {
+    const w = zoneWorld(0);
+    const st = newZoneState();
+    const p = w.player;
+    // 측량 1: 출발 자리에서 바로 벤다
+    cutToward(w, 0, c(ZONE1_P1.cx), c(ZONE1_P1.cy), st);
+    run(w, 0, 1.2, emptyInput(), st);
+    expect(w.stats.kills.abyss).toBe(1);
+    expect(zoneStatus(ZONES[0], w, st).label).toBe('측량 2/3 포대 · 준비');
+    run(w, 0, BEAT_GAP + 0.2, emptyInput(), st);
+    expect(st.beat).toBe(1);
+    expect(zoneStatus(ZONES[0], w, st).label).toBe('측량 2/3 포대 · 적 0/2');
+    run(w, 0, 1.2, emptyInput(), st); // 소환 연출(0.9초)
+    // 측량 2: 메사(사격형) 남쪽, 서쪽 대지(돌진형) 남쪽에서 벤다. 서는 자리는 테스트 준비로 옮긴다
+    p.x = c(56);
+    p.y = c(ZONE1_MESA.y1 + 4);
+    cutToward(w, 0, c(56), c(19), st);
+    run(w, 0, 1.2, emptyInput(), st);
+    p.x = c(ZONE1_P2.cx);
+    p.y = c(ZONE1_P2.cy + 7);
+    cutToward(w, 0, c(ZONE1_P2.cx), c(ZONE1_P2.cy), st);
+    run(w, 0, 1.2, emptyInput(), st);
+    // 측량 3은 고리 안에 들어가야 시작한다
+    run(w, 0, BEAT_GAP + 1, emptyInput(), st);
+    expect(st.beat).toBe(1);
+    expect(st.pending).toBe(true);
+    const wait = zoneStatus(ZONES[0], w, st);
+    expect(wait.label).toBe('측량 3/3 균열 고리 · 준비');
+    expect(wait.hint).toContain('고리 안으로');
+    // 고리 한가운데에 서서, 고리 위에 올라선 적의 발밑을 벤다
+    p.x = c(ZONE1_RING.cx);
+    p.y = c(ZONE1_RING.cy);
+    run(w, 0, 0.1, emptyInput(), st);
+    expect(st.beat).toBe(2);
+    let k = 0;
+    while (!zoneStatus(ZONES[0], w, st).done && w.mode === 'play' && k++ < 60 * 60) {
+      const onRing = w.enemies.find((e) => {
+        if (e.state === 'dead' || e.state === 'spawn' || e.airborne) return false;
+        const d = Math.hypot(e.x - c(ZONE1_RING.cx), e.y - c(ZONE1_RING.cy)) / 6;
+        return d >= ZONE1_RING.inner - 0.5 && d <= ZONE1_RING.outer + 0.5 && w.terrain.heightAt(e.x, e.y) === 1;
+      });
+      if (onRing && w.player.cutCool === 0) cutToward(w, 0, onRing.x, onRing.y, st);
+      else step(w, 0, emptyInput(), st);
+    }
+    expect(w.mode).toBe('play');
+    const done = zoneStatus(ZONES[0], w, st);
+    expect(done.done).toBe(true);
+    expect(done.label).toBe('측량 3/3 균열 고리 · 적 3/3');
+    const r = zoneResult(w);
+    expect(r.terrainKills + r.airKills).toBeGreaterThanOrEqual(5);
+  });
+
+  it('다음 단계의 적이 설 자리가 무너져 있으면 환원될 때까지 기다렸다가 나타난다', () => {
+    const w = zoneWorld(0);
+    const st = newZoneState();
+    const p = w.player;
+    // 메사(측량 2의 사격형 자리)를 먼저 베어 둔다
+    p.x = c(56);
+    p.y = c(ZONE1_MESA.y1 + 4);
+    cutToward(w, 0, c(56), c(19), st);
+    // 측량 1의 적을 처치
+    p.x = c(40);
+    p.y = c(34);
+    run(w, 0, 0.5, emptyInput(), st);
+    cutToward(w, 0, c(ZONE1_P1.cx), c(ZONE1_P1.cy), st);
+    run(w, 0, 1.2 + BEAT_GAP + 0.5, emptyInput(), st);
+    expect(st.pending).toBe(true);
+    expect(st.beat).toBe(0);
+    run(w, 0, 6, emptyInput(), st);
+    expect(st.beat).toBe(1);
+    const shooter = w.enemies.find((e) => e.kind === 'shooter')!;
+    expect(shooter.z).toBe(4);
+  });
+
+  it('측량 평가: 전부 지형+무피해 S, 지형 80% 이상+피해 2 이하 A, 그 밖 B', () => {
+    const base = { cuts: 0, airHits: 0, time: 0, airKills: 0 };
+    expect(surveyGrade({ ...base, terrainKills: 6, bladeKills: 0, hurt: 0 }).grade).toBe('S');
+    expect(surveyGrade({ ...base, terrainKills: 5, bladeKills: 1, hurt: 2 }).grade).toBe('A');
+    expect(surveyGrade({ ...base, terrainKills: 6, bladeKills: 0, hurt: 3 }).grade).toBe('B');
+    expect(surveyGrade({ ...base, terrainKills: 3, bladeKills: 3, hurt: 0 }).grade).toBe('B');
+    expect(ZONE1_BEATS.reduce((n, b) => n + b.enemies.length, 0)).toBe(6);
   });
 });
 
@@ -157,7 +268,7 @@ describe('구역 3 — 환원 구역', () => {
       expect(w.stats.airHits).toBe(before + 1);
       run(w, 2, 0.5);
     }
-    expect(zoneStatus(ZONES[2], w)).toEqual({ done: true, label: '공중 추가타 3/3' });
+    expect(zoneStatus(ZONES[2], w)).toMatchObject({ done: true, label: '공중 추가타 3/3' });
   });
 
   it('살아 있는 적이 없고 목표가 남았으면 언덕 꼭대기에 감시자가 새로 선다(진행 불가 방지). 목표를 채우면 더 서지 않는다', () => {

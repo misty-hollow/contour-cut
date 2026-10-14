@@ -149,6 +149,8 @@ export class World {
   mode: Mode = 'play';
   time = 0;
   hitstop = 0;
+  /** 화면 안내 표지(칸 좌표·반경). 시뮬레이션에는 영향 없음 — 첫 여정이 "여기로 가라"를 보여 줄 때만 */
+  marker: { cx: number; cy: number; r: number } | null = null;
   readonly rng: Rng;
   private nextId = 1;
   private flow: Int16Array;

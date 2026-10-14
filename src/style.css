@@ -214,6 +214,31 @@ body {
 #hud-goal {
   color: #e8ff3a;
 }
+/* 전술 힌트: 화면 아래 가운데, 좌우 HUD 상자 사이 */
+#hint {
+  left: 50%;
+  bottom: calc(14px * var(--s));
+  transform: translateX(-50%);
+  max-width: 84%;
+  white-space: normal;
+  text-align: center;
+  color: var(--ink);
+  border-top: calc(0.5px * var(--s)) solid rgba(25, 245, 200, 0.5);
+  font-size: calc(5px * var(--s));
+}
+#zone-clear-grade b {
+  font-size: calc(10px * var(--s));
+  padding: 0 calc(2px * var(--s));
+}
+.grade-S {
+  color: #e8ff3a;
+}
+.grade-A {
+  color: var(--cyan);
+}
+.grade-B {
+  color: var(--dim);
+}
 #zone-banner {
   position: absolute;
   left: 50%;

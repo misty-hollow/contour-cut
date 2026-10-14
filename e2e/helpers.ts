@@ -66,7 +66,9 @@ export async function hudGeometry(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const problems: string[] = [];
     const stage = document.getElementById('stage')!.getBoundingClientRect();
-    const ids = ['hud-tl', 'hud-tr', 'hud-bl', 'hud-br'];
+    // 첫 여정 힌트 줄은 보일 때만 함께 검사한다
+    const hint = document.getElementById('hint');
+    const ids = ['hud-tl', 'hud-tr', 'hud-bl', 'hud-br', ...(hint && !hint.classList.contains('hidden') ? ['hint'] : [])];
     const rects = ids.map((id) => [id, document.getElementById(id)!.getBoundingClientRect()] as const);
     for (const [id, r] of rects) {
       if (r.width === 0 || r.height === 0) problems.push(`${id} 크기 0`);
