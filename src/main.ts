@@ -2,7 +2,7 @@ import './style.css';
 import { Sfx } from './audio';
 import { FIXED_DT, LEVEL_PX, ORIGIN_Y, PLAYER, VIEW_H, VIEW_W, tune, type Tune } from './config';
 import { Controls } from './input';
-import { journeyTotals, parseZoneParam, zoneResult, ZONES, zoneStatus, zoneTick, type ZoneResult } from './journey';
+import { journeyTotals, newZoneState, parseZoneParam, surveyGrade, zoneResult, ZONES, zoneStatus, zoneTick, type ZoneResult } from './journey';
 import { DEFAULT_SEED, SCENARIOS } from './maps';
 import { Renderer } from './render';
 import { emptyInput, World, type GameEvent } from './world';
@@ -35,6 +35,8 @@ let mode: PlayMode = scenario ? 'scenario' : 'journey';
 const firstZone = parseZoneParam(params.get('zone'));
 let zoneIndex = firstZone;
 let phase: Phase = 'play';
+/** 지금 구역의 진행 상태(구역 1 단계). 구역에 들어갈 때마다 새로 */
+let zstate = newZoneState();
 /** 구역별 결과. 같은 구역을 다시 깨면 덮어써서 최종 집계에 두 번 들어가지 않는다 */
 let results: (ZoneResult | undefined)[] = [];
 
@@ -97,6 +99,7 @@ $('next-zone').addEventListener('click', () => nextZone());
 function enterZone(i: number): void {
   zoneIndex = i;
   phase = 'play';
+  zstate = newZoneState();
   world = makeWorld();
   resetTransient();
   zoneClearEl.classList.add('hidden');
@@ -138,6 +141,10 @@ function onZoneClear(): void {
     phase = 'zoneClear';
     $('zone-clear-title').textContent = `구역 ${zoneIndex + 1} 돌파 — ${z.name}`;
     $('zone-clear-stats').textContent = `${Math.round(world.time)}초 · 측량 절단 ${s.cuts}회 · 지형 처치 ${s.kills.fall + s.kills.abyss} · 공중 추가타 ${s.airHits}`;
+    if (z.graded) {
+      const g = surveyGrade(results[zoneIndex]!);
+      $('zone-clear-grade').innerHTML = `측량 평가 <b class="grade-${g.grade}">${g.grade}</b> — 지형으로 쓰러뜨림 ${g.terrain}/${g.total} · 받은 피해 ${results[zoneIndex]!.hurt}`;
+    } else $('zone-clear-grade').textContent = '';
     $('zone-clear-next').textContent = `다음: 구역 ${zoneIndex + 2} — ${ZONES[zoneIndex + 1].name}`;
     zoneClearEl.classList.remove('hidden');
   }
@@ -254,6 +261,7 @@ syncHelp();
 
 // ── HUD ────────────────────────────────────────────────
 const feed: { text: string; t: number }[] = [];
+const hintEl = $('hint');
 const feedEl = $('feed');
 function pushFeed(text: string): void {
   feed.unshift({ text, t: 1.6 });
@@ -266,10 +274,17 @@ function updateHud(dt: number): void {
   if (mode === 'journey') {
     const z = ZONES[zoneIndex];
     $('hud-wave').textContent = `구역 ${zoneIndex + 1}/${ZONES.length} · ${z.name}`;
-    $('hud-goal').textContent = `목표: ${zoneStatus(z, world).label}`;
+    const st = zoneStatus(z, world, zstate);
+    $('hud-goal').textContent = `목표: ${st.label}`;
+    // 다음 단계가 자리를 요구하면 그 자리에 안내 표지
+    const next = zstate.pending && z.beats ? z.beats[zstate.beat + 1] : undefined;
+    world.marker = next?.trigger ?? null;
+    hintEl.textContent = st.hint;
+    hintEl.classList.toggle('hidden', !st.hint || phase !== 'play');
   } else {
     $('hud-wave').textContent = world.setup.waves ? `WAVE ${world.stats.wave}` : `실험: ${world.setup.name}`;
     $('hud-goal').textContent = '';
+    hintEl.classList.add('hidden');
   }
   if (bannerT > 0) {
     bannerT -= dt;
@@ -369,8 +384,12 @@ function frame(now: number): void {
       n++;
       if (mode === 'journey' && !world.isOver()) {
         const z = ZONES[zoneIndex];
-        zoneTick(z, world);
-        if (zoneStatus(z, world).done) {
+        const beat = zoneTick(z, world, zstate);
+        if (beat !== null && z.beats) {
+          pushFeed(`측량 ${beat + 1}/${z.beats.length} — ${z.beats[beat].name}`);
+          sfx.launch();
+        }
+        if (zoneStatus(z, world, zstate).done) {
           onZoneClear();
           break;
         }
@@ -401,7 +420,7 @@ declare global {
         started: boolean;
         paused: boolean;
         tune: Tune;
-        journey: { mode: PlayMode; zone: number; zoneId: string; phase: Phase; label: string; done: boolean };
+        journey: { mode: PlayMode; zone: number; zoneId: string; phase: Phase; label: string; done: boolean; beat: number; pending: boolean; hint: string };
       };
       /** 카메라 상태(줌·흔들림) 관찰 */
       camera: () => { zoom: number; shakeX: number; shakeY: number };
@@ -417,13 +436,13 @@ declare global {
 window.__cc = {
   snapshot: () => {
     const z = ZONES[zoneIndex];
-    const st = zoneStatus(z, world);
+    const st = zoneStatus(z, world, zstate);
     return {
       ...world.snapshot(),
       started,
       paused,
       tune: { ...tune },
-      journey: { mode, zone: zoneIndex + 1, zoneId: z.id, phase, label: st.label, done: st.done },
+      journey: { mode, zone: zoneIndex + 1, zoneId: z.id, phase, label: st.label, done: st.done, beat: zstate.beat + 1, pending: zstate.pending, hint: st.hint },
     };
   },
   camera: () => ({ zoom: renderer.cam.zoom, shakeX: renderer.cam.shakeX, shakeY: renderer.cam.shakeY }),

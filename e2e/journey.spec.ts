@@ -6,23 +6,60 @@ import { aim, canvasStats, cellC, cutAt, hudGeometry, openGame, shot, snap, walk
 
 const journey = (page: Page) => snap(page).then((s) => s.journey);
 
-/** 진행 표시(예: "고지대의 적 2/4")의 앞 숫자 */
-const progress = async (page: Page) => Number(/(\d+)\//.exec((await journey(page)).label)?.[1] ?? 0);
 
-async function clearZone1(page: Page): Promise<void> {
-  // 메사(사격형) → 서·중·동 대지(돌진형). 서는 자리에서 고지대 한가운데를 조준해 벤다
-  const targets: { path: [number, number][]; aim: [number, number] }[] = [
-    { path: [[40, 27]], aim: [40, 21] },
-    { path: [[18, 27], [18, 19]], aim: [18, 12] },
-    { path: [[18, 16], [40, 16]], aim: [40, 9] },
-    { path: [[62, 16], [62, 19]], aim: [62, 12] },
-  ];
-  for (const tg of targets) {
-    await walkPath(page, tg.path);
-    const before = await progress(page);
-    await cutAt(page, cellC(tg.aim[0]), cellC(tg.aim[1]));
-    await expect.poll(() => progress(page), { timeout: 4000, message: `고지대 ${tg.aim} 처치` }).toBeGreaterThan(before);
+/** 살아 있는(소환 연출이 끝난) 적 */
+const liveEnemies = async (page: Page) => (await snap(page)).enemies.filter((e) => e.state !== 'dead' && e.state !== 'spawn');
+
+async function zone1Once(page: Page): Promise<boolean> {
+  // 측량 1 — 첫 측량: 출발 자리에서 앞 대지를 벤다
+  await expect(page.getByTestId('hint')).toContainText('칼은 닿지 않는다');
+  await cutAt(page, cellC(40), cellC(25));
+  await expect.poll(async () => (await journey(page)).label, { message: '측량 2 준비' }).toContain('측량 2/3');
+  await shot(page, '13-zone1-beat2-ready');
+  // 측량 2 — 포대: 적이 나타나기를 기다렸다가 메사 남쪽 → 서쪽 대지 남쪽
+  await expect.poll(async () => (await liveEnemies(page)).length, { timeout: 6000, message: '포대 적 등장' }).toBe(2);
+  await walkPath(page, [[56, 34], [56, 26]]);
+  await cutAt(page, cellC(56), cellC(19));
+  await expect.poll(async () => (await snap(page)).enemies.filter((e) => e.kind === 'shooter' && e.state !== 'dead').length, { timeout: 4000, message: '메사 사격형 낙하' }).toBe(0);
+  await walkPath(page, [[56, 34], [22, 34], [22, 25]]);
+  await cutAt(page, cellC(22), cellC(18));
+  await expect.poll(async () => (await journey(page)).label, { timeout: 5000, message: '측량 3 준비' }).toContain('측량 3/3');
+  // 측량 3 — 균열 고리: 안내 표지가 있는 고리 안으로 들어가면 적이 나타난다
+  await expect(page.getByTestId('hint')).toContainText('고리 안으로');
+  await walkPath(page, [[30, 25], [30, 11], [40, 11]]);
+  await expect.poll(async () => (await journey(page)).beat, { timeout: 4000, message: '고리 안에서 측량 3 시작' }).toBe(3);
+  await shot(page, '14-zone1-ring');
+  // 고리 위에 올라선 적(또는 칼날 길이 안의 적)의 발밑을 벤다
+  const t0 = Date.now();
+  while (Date.now() - t0 < 45_000) {
+    const s = await snap(page);
+    if (s.journey.phase !== 'play') return s.journey.phase === 'zoneClear';
+    if (s.mode !== 'play') return false;
+    const p = s.player;
+    const ready = s.enemies.filter((e) => e.state !== 'dead' && e.state !== 'spawn' && !e.airborne);
+    const d = (e: { x: number; y: number }) => Math.hypot(e.x - p.x, e.y - p.y);
+    const target = ready.sort((a, b) => d(a) - d(b)).find((e) => {
+      const r = Math.hypot(e.x - cellC(40), e.y - cellC(11)) / 6;
+      return (r >= 3.5 && r <= 6 && d(e) < 44) || d(e) < 30;
+    });
+    if (target) {
+      await cutAt(page, target.x, target.y);
+      await page.waitForTimeout(400);
+    } else await page.waitForTimeout(60);
   }
+  return false;
+}
+
+async function clearZone1(page: Page): Promise<number> {
+  // 쓰러지면 R로 구역 1을 처음부터(최대 3번)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (await zone1Once(page)) return attempt;
+    expect((await snap(page)).mode, '구역 1 실패는 게임 오버뿐이어야 한다').toBe('over');
+    await page.keyboard.press('KeyR');
+    await expect.poll(async () => (await snap(page)).mode).toBe('play');
+    await walkTo(page, cellC(40), cellC(34));
+  }
+  throw new Error('구역 1을 3번 안에 정리하지 못함');
 }
 
 async function clearZone2(page: Page): Promise<number> {
@@ -96,20 +133,23 @@ test('첫 여정 완주: 타이틀 → 구역 1 균열 지대 → 구역 2 접�
   test.setTimeout(240_000);
   const errors = await openGame(page);
   let j = await journey(page);
-  expect(j).toMatchObject({ mode: 'journey', zone: 1, zoneId: 'rift', phase: 'play' });
+  expect(j).toMatchObject({ mode: 'journey', zone: 1, zoneId: 'rift', phase: 'play', beat: 1 });
   await expect(page.getByTestId('zone-banner')).toContainText('구역 1 — 균열 지대');
-  await expect(page.getByTestId('hud-goal')).toContainText('고지대의 적 0/4');
+  await expect(page.getByTestId('hud-goal')).toContainText('측량 1/3 첫 측량 · 적 0/1');
   await expect(page.getByTestId('hud-wave')).toContainText('구역 1/3');
+  await expect(page.getByTestId('hint')).toBeVisible();
   expect(await hudGeometry(page)).toEqual([]);
-  await shot(page, '13-journey-zone1');
+  await shot(page, '12-journey-zone1');
 
-  // 구역 1
-  await clearZone1(page);
+  // 구역 1: 세 번의 측량
+  const z1attempts = await clearZone1(page);
   await expect(page.getByTestId('zone-clear')).toBeVisible();
   await expect(page.getByTestId('zone-clear')).toContainText('구역 1 돌파');
+  await expect(page.getByTestId('zone-clear-grade')).toContainText(/측량 평가 [SAB]/);
+  await expect(page.getByTestId('hint')).toBeHidden();
   const s1 = await snap(page);
-  expect(s1.stats.kills.fall + s1.stats.kills.abyss, '구역 1은 지형으로 처치').toBe(4);
-  await shot(page, '14-journey-zone1-clear');
+  expect(s1.stats.kills.fall + s1.stats.kills.abyss + s1.stats.kills.air, '구역 1은 대부분 지형으로 처치').toBeGreaterThanOrEqual(5);
+  await shot(page, '15-journey-zone1-clear');
   // 클리어 화면 동안 시뮬레이션은 멈춘다
   const t1 = s1.time;
   await page.waitForTimeout(300);
@@ -125,8 +165,7 @@ test('첫 여정 완주: 타이틀 → 구역 1 균열 지대 → 구역 2 접�
   expect(s.stats.cuts).toBe(0);
   expect(s.enemies.length).toBe(5);
   await expect(page.getByTestId('hud-goal')).toContainText('출구 표지');
-  await page.waitForTimeout(400);
-  await shot(page, '15-journey-zone2');
+  await expect(page.getByTestId('hint')).toBeHidden();
   const attempts = await clearZone2(page);
   await expect(page.getByTestId('zone-clear')).toContainText('구역 2 돌파');
   await page.keyboard.press('Enter');
@@ -151,26 +190,28 @@ test('첫 여정 완주: 타이틀 → 구역 1 균열 지대 → 구역 2 접�
   await page.keyboard.press('KeyR');
   await expect(page.getByTestId('journey-clear')).toBeHidden();
   j = await journey(page);
-  expect(j).toMatchObject({ zone: 1, zoneId: 'rift', phase: 'play', label: '고지대의 적 0/4' });
+  expect(j).toMatchObject({ zone: 1, zoneId: 'rift', phase: 'play', beat: 1, label: '측량 1/3 첫 측량 · 적 0/1' });
   expect((await snap(page)).player.hp).toBe(5);
-  test.info().annotations.push({ type: '구역 2 시도 횟수', description: String(attempts) });
+  test.info().annotations.push({ type: '구역 1·2 시도 횟수', description: `${z1attempts}·${attempts}` });
   expect(errors).toEqual([]);
 });
 
 test('첫 여정 게임 오버: 쓰러지면 "R 이 구역 다시 시도" → 같은 구역 처음 상태로', async ({ page }) => {
   test.setTimeout(60_000);
   const errors = await openGame(page);
-  // 메사 사격형 아래에 서서 맞는다
-  await walkTo(page, cellC(40), cellC(27));
-  await expect.poll(async () => (await snap(page)).mode, { timeout: 30_000, message: '게임 오버' }).toBe('over');
+  // 측량 1을 끝내고, 측량 2의 메사 사격형 아래에 서서 맞는다
+  await cutAt(page, cellC(40), cellC(25));
+  await expect.poll(async () => (await liveEnemies(page)).length, { timeout: 8000, message: '포대 적 등장' }).toBe(2);
+  await walkPath(page, [[56, 34], [56, 26]]);
+  await expect.poll(async () => (await snap(page)).mode, { timeout: 40_000, message: '게임 오버' }).toBe('over');
   await expect(page.getByTestId('over')).toContainText('R 이 구역 다시 시도');
   await page.keyboard.press('KeyR');
   await expect(page.getByTestId('over')).toBeHidden();
   const s = await snap(page);
   expect(s.mode).toBe('play');
-  expect(s.journey).toMatchObject({ zone: 1, phase: 'play', label: '고지대의 적 0/4' });
+  expect(s.journey).toMatchObject({ zone: 1, phase: 'play', beat: 1, pending: false, label: '측량 1/3 첫 측량 · 적 0/1' });
   expect(s.player.hp).toBe(5);
-  expect(s.enemies.filter((e) => e.state !== 'dead').length).toBe(4);
+  expect(s.enemies.filter((e) => e.state !== 'dead').length).toBe(1);
   expect(errors).toEqual([]);
 });
 

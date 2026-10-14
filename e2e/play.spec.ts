@@ -31,6 +31,7 @@ test('HUD는 여러 창 크기에서 화면 안에 있고 겹치지 않는다', 
     [1024, 768],
     [800, 600],
     [1366, 768],
+    [960, 540],
   ]) {
     await page.setViewportSize({ width: w, height: h });
     await page.waitForTimeout(100);
