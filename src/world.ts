@@ -21,6 +21,9 @@ export const emptyInput = (): Input => ({ moveX: 0, moveY: 0, aimX: 0, aimY: 0, 
 /** fall·abyss = 지형 처치, air = 지형 환원으로 띄운 적을 벤 처치, blade = 칼날 직접 처치 */
 export type KillCause = 'fall' | 'abyss' | 'blade' | 'air';
 
+/** 플레이어가 다친 까닭(게임 오버 화면의 원인 안내) */
+export type HurtCause = 'lunge' | 'bolt' | 'abyss';
+
 export type GameEvent =
   | { type: 'slash'; x0: number; y0: number; x1: number; y1: number; z: number; crossings: { x: number; y: number; level: number }[]; cells: number[] }
   | { type: 'hit'; x: number; y: number; z: number }
@@ -28,7 +31,7 @@ export type GameEvent =
   | { type: 'shock'; x: number; y: number; z: number; radius: number }
   | { type: 'kill'; x: number; y: number; z: number; cause: KillCause; kind: EnemyKind }
   | { type: 'fallAbyss'; x: number; y: number; who: 'player' | 'enemy' }
-  | { type: 'hurt'; x: number; y: number }
+  | { type: 'hurt'; x: number; y: number; cause: HurtCause }
   | { type: 'boltBlocked'; x: number; y: number; z: number }
   | { type: 'fire'; x: number; y: number; z: number }
   | { type: 'restore'; cells: number[] }
@@ -375,7 +378,7 @@ export class World {
     p.vz = 0;
     p.airborne = false;
     p.dashT = 0;
-    this.damagePlayer(p.x, p.y, PLAYER.respawnInv, true);
+    this.damagePlayer(p.x, p.y, PLAYER.respawnInv, 'abyss', true);
   }
 
   private relocateToSolid(b: Body): void {
@@ -393,14 +396,14 @@ export class World {
         }
   }
 
-  private damagePlayer(x: number, y: number, inv: number, ignoreInv = false): void {
+  private damagePlayer(x: number, y: number, inv: number, cause: HurtCause, ignoreInv = false): void {
     const p = this.player;
     if (!ignoreInv && p.inv > 0) return;
     p.hp -= 1;
     p.inv = inv;
     p.hurtT = 0.25;
     this.stats.hurt++;
-    this.events.push({ type: 'hurt', x, y });
+    this.events.push({ type: 'hurt', x, y, cause });
     if (p.hp <= 0) {
       p.hp = 0;
       this.mode = 'over';
@@ -593,7 +596,7 @@ export class World {
       case 'lunge': {
         // 돌진은 고정 방향. 절벽 끝에서 피하면 그대로 떨어진다
         this.moveBody(e, e.dirX * ENEMY.chaser.lungeSpeed * dt, e.dirY * ENEMY.chaser.lungeSpeed * dt, 'air');
-        if (Math.hypot(p.x - e.x, p.y - e.y) < 7 && Math.abs(p.z - e.z) < 1.5) this.damagePlayer(e.x, e.y, PLAYER.hurtInv);
+        if (Math.hypot(p.x - e.x, p.y - e.y) < 7 && Math.abs(p.z - e.z) < 1.5) this.damagePlayer(e.x, e.y, PLAYER.hurtInv, 'lunge');
         if (e.t <= 0) {
           e.state = 'recover';
           e.t = ENEMY.chaser.recover;
@@ -715,7 +718,7 @@ export class World {
         continue;
       }
       if (Math.hypot(p.x - b.x, p.y - b.y) < 5 && boltHitsBody(b.alt, p.z) && p.inv === 0) {
-        this.damagePlayer(b.x, b.y, PLAYER.hurtInv);
+        this.damagePlayer(b.x, b.y, PLAYER.hurtInv, 'bolt');
         continue;
       }
       keep.push(b);

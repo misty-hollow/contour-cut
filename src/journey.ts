@@ -19,6 +19,8 @@ export interface Beat {
   prompt?: string;
   /** 플레이어가 이 원(칸 좌표·반경) 안에 들어와야 시작한다 */
   trigger?: { cx: number; cy: number; r: number };
+  /** 이 단계에서 처음 벨 때까지 깜빡여 눈길을 끄는 등고선(칸 좌표 원). 그리기 안내만, 판정과 무관 */
+  focus?: { cx: number; cy: number; r: number };
   enemies: EnemySpec[];
 }
 
@@ -46,6 +48,8 @@ export interface Zone {
   legs?: Leg[];
   /** 돌파 화면에 측량 평가를 보여 줄지 */
   graded?: boolean;
+  /** 진입 방향(구역 표제 문구)과 첫 진입 때 측량 주사선이 나아가는 쪽 */
+  entry: { from: string; scan: 'north' | 'east' };
   build: () => Setup;
 }
 
@@ -139,11 +143,13 @@ export const ZONE1_BEATS: Beat[] = [
   {
     name: '첫 측량',
     hint: '대지 위의 적에게 칼은 닿지 않는다 — 대지 가장자리(등고선)를 조준해 클릭',
+    focus: { cx: ZONE1_P1.cx, cy: ZONE1_P1.cy, r: 3.6 },
     enemies: [{ kind: 'chaser', cx: ZONE1_P1.cx, cy: ZONE1_P1.cy }],
   },
   {
     name: '포대',
     hint: '메사를 베면 사격형이 3단 떨어진다 · 서쪽 대지는 절대 심연이 된다 · 탄을 피해 움직여라',
+    focus: { cx: 56, cy: 19.5, r: 4.6 },
     enemies: [
       { kind: 'shooter', cx: 56, cy: 19 },
       { kind: 'chaser', cx: ZONE1_P2.cx, cy: ZONE1_P2.cy },
@@ -260,6 +266,7 @@ export const ZONE3_BEATS: Beat[] = [
   {
     name: '가두기',
     hint: '언덕을 베어 구덩이에 가두고 7초 뒤 떠오를 때 벤다 · 심연 너머로 베면 발밑도 무너진다',
+    focus: { cx: H1.cx, cy: H1.cy, r: 6.6 },
     enemies: [
       { kind: 'chaser', cx: H1.cx, cy: H1.cy, dormant: 9 },
       { kind: 'chaser', cx: H1.cx + 1, cy: H1.cy - 1, dormant: 9 },
@@ -269,6 +276,7 @@ export const ZONE3_BEATS: Beat[] = [
   {
     name: '환원대',
     hint: '환원대를 베면 바닥 높이가 된다 · 적을 끌어들이면 7초 뒤 솟는 땅이 한꺼번에 띄운다',
+    focus: { cx: 40, cy: 24, r: 4.6 },
     enemies: [
       { kind: 'chaser', cx: 3, cy: 20 },
       { kind: 'chaser', cx: 77, cy: 20 },
@@ -305,9 +313,9 @@ function buildZone3(): Setup {
 }
 
 export const ZONES: Zone[] = [
-  { id: 'rift', name: '균열 지대', goal: '세 번의 측량 — 적을 칼보다 지형으로 떨어뜨려라', theme: '절단과 낙하', kind: 'beats', beats: ZONE1_BEATS, beatWord: '측량', graded: true, build: buildZone1 },
-  { id: 'canyon', name: '접힘 협곡', goal: '동쪽 출구 표지까지 돌파하라 — 적을 다 잡을 필요는 없다', theme: '고도차를 타고 돌파', kind: 'reach', legs: ZONE2_LEGS, build: buildZone2 },
-  { id: 'restore', name: '환원 구역', goal: '세 번의 환원 — 무너뜨린 땅이 돌아오는 순간을 무기로', theme: '시간차 지형 조작과 콤보', kind: 'beats', beats: ZONE3_BEATS, beatWord: '환원', build: buildZone3 },
+  { id: 'rift', name: '균열 지대', goal: '세 번의 측량 — 적을 칼보다 지형으로 떨어뜨려라', theme: '절단과 낙하', kind: 'beats', beats: ZONE1_BEATS, beatWord: '측량', graded: true, entry: { from: '남쪽', scan: 'north' }, build: buildZone1 },
+  { id: 'canyon', name: '접힘 협곡', goal: '동쪽 출구 표지까지 돌파하라 — 적을 다 잡을 필요는 없다', theme: '고도차를 타고 돌파', kind: 'reach', legs: ZONE2_LEGS, entry: { from: '서쪽 단애', scan: 'east' }, build: buildZone2 },
+  { id: 'restore', name: '환원 구역', goal: '세 번의 환원 — 무너뜨린 땅이 돌아오는 순간을 무기로', theme: '시간차 지형 조작과 콤보', kind: 'beats', beats: ZONE3_BEATS, beatWord: '환원', entry: { from: '남쪽', scan: 'north' }, build: buildZone3 },
 ];
 
 /** `?zone=N` 해석: 1~구역 수의 정수만 받아 0부터 세는 번호로. 그 밖(소수·0·범위 밖·문자·없음)은 구역 1 */

@@ -5,7 +5,8 @@ import { Controls } from './input';
 import { journeyTotals, newZoneState, parseZoneParam, surveyGrade, zoneResult, ZONES, zoneStatus, zoneTick, type ZoneResult } from './journey';
 import { DEFAULT_SEED, SCENARIOS } from './maps';
 import { Renderer, type Mood } from './render';
-import { emptyInput, World, type GameEvent } from './world';
+import { isAbyss } from './terrain';
+import { emptyInput, World, type GameEvent, type HurtCause } from './world';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -51,6 +52,8 @@ function makeWorld(): World {
 }
 
 let world = makeWorld();
+// 타이틀 뒤로 비치는 지도도 첫 구역의 재질로(붕괴한 세계의 첫인상)
+if (mode === 'journey') renderer.setMood(ZONE_MOOD[ZONES[zoneIndex].id] ?? 'plain');
 let started = false;
 let paused = false;
 let acc = 0;
@@ -125,20 +128,26 @@ function start(asWaves = false): void {
   if (mode !== 'journey') {
     renderer.setMood('plain');
     sfx.ambience('plain');
+    // 측량 신호가 지도를 드러내며 시작(재시작과 같은 연출). 첫 여정은 enterZone이 측량 주사선으로 연다
+    renderer.resetFx();
   }
-  // 측량 신호가 지도를 드러내며 시작(구역 진입·재시작과 같은 연출)
-  renderer.resetFx();
   last = performance.now();
 }
 $('start').addEventListener('click', () => start());
 $('start-waves').addEventListener('click', () => start(true));
 $('next-zone').addEventListener('click', () => nextZone());
 
-/** 구역 시작(또는 재도전): 지형·적·탄·타이머·연출을 모두 새로 만든다 */
-function enterZone(i: number): void {
+/**
+ * 구역 시작(또는 재도전): 지형·적·탄·타이머·연출을 모두 새로 만든다.
+ * 처음 들어설 때(fresh)는 진입 방향에서 측량 주사선이 지도를 그려 나가고 지도 표제(구역 이름·표고·진입 방향)가 펼쳐진다.
+ * 같은 구역을 다시 할 때는 짧은 측량 신호와 이름 한 줄만(반복 플레이를 늦추지 않게). 어느 쪽도 입력을 막지 않는다
+ */
+function enterZone(i: number, fresh = true): void {
   zoneIndex = i;
   phase = 'play';
   zstate = newZoneState();
+  beatCutBase = 0;
+  lastHurt = null;
   world = makeWorld();
   resetTransient();
   zoneClearEl.classList.add('hidden');
@@ -146,10 +155,28 @@ function enterZone(i: number): void {
   const z = ZONES[i];
   renderer.setMood(ZONE_MOOD[z.id] ?? 'plain');
   sfx.ambience(ZONE_MOOD[z.id] ?? 'plain');
-  banner.innerHTML = `<b>구역 ${i + 1} — ${z.name}</b><br>${z.goal}`;
-  banner.classList.remove('hidden', 'fade');
-  bannerT = 3;
+  const name = `<b>구역 ${i + 1} — ${z.name}</b>`;
+  if (fresh) {
+    renderer.beginSurvey(z.entry.scan);
+    const hs = Array.from(world.terrain.base).filter((h) => !isAbyss(h));
+    banner.innerHTML =
+      `<div class="cart-top">측량도 Z${String(i + 1).padStart(2, '0')} · ${i + 1}/${ZONES.length}</div>${name}` +
+      `<div class="cart-goal">${z.goal}</div><div class="cart-meta">표고 ${Math.min(...hs)}–${Math.max(...hs)} · ${z.entry.from}에서 진입 · ${z.theme}</div>`;
+    bannerT = 3.2;
+  } else {
+    banner.innerHTML = `${name}<div class="cart-goal">다시 측량</div>`;
+    bannerT = 1.3;
+  }
+  banner.classList.toggle('brief', !fresh);
+  banner.classList.remove('hidden', 'fade', 'anim');
+  void banner.offsetWidth;
+  banner.classList.add('anim');
 }
+/** 지금 단계가 시작될 때의 절단 수: 그 뒤 처음 벨 때까지 단계의 안내 등고선(focus)이 깜빡인다 */
+let beatCutBase = 0;
+/** 마지막으로 다친 까닭(게임 오버 화면). self = 내가 벤 땅에 발밑이 무너져 심연에 빠짐 */
+let lastHurt: HurtCause | 'self' | null = null;
+let fellSelf = false;
 let bannerT = 0;
 /** 쓰러진 시각(rAF 시각). 결과 화면을 잠시 늦게 띄운다 */
 let overAt = -1;
@@ -204,10 +231,11 @@ function restart(newSeed?: number): void {
     if (phase === 'complete') {
       results = [];
       enterZone(0);
-    } else enterZone(zoneIndex);
+    } else enterZone(zoneIndex, false);
     return;
   }
   world = makeWorld();
+  lastHurt = null;
   resetTransient();
 }
 
@@ -368,6 +396,9 @@ function updateHud(dt: number): void {
     }
     // 다음 단계가 자리를 요구하거나(트리거) 출현 지점에서 물러나야 하면 갈 곳에 안내 표지
     world.marker = st.marker ?? null;
+    // 이 단계에서 아직 한 번도 베지 않았으면 벨 곳의 등고선이 깜빡인다(첫 절단으로 꺼진다)
+    const beat = z.beats?.[zstate.beat];
+    renderer.focus = phase === 'play' && !zstate.pending && beat?.focus && world.stats.cuts === beatCutBase ? beat.focus : null;
     // 힌트는 바뀐 순간 또렷하게, 같은 문구가 8초 넘게 이어지면 옅어진다(피격하면 다시 또렷하게)
     if (hintEl.textContent !== st.hint || p.hurtT > 0) hintSince = world.time;
     hintEl.textContent = st.hint;
@@ -375,6 +406,7 @@ function updateHud(dt: number): void {
     hintEl.classList.toggle('hidden', !st.hint || phase !== 'play');
   } else {
     zoneEl.classList.add('hidden');
+    renderer.focus = null;
     waveEl.classList.remove('hidden');
     waveEl.textContent = world.setup.waves ? `WAVE ${world.stats.wave}` : `실험: ${world.setup.name}`;
     hintEl.classList.add('hidden');
@@ -451,9 +483,17 @@ function handleEvents(events: GameEvent[]): void {
         break;
       case 'hurt':
         sfx.hurt();
+        lastHurt = ev.cause === 'abyss' && fellSelf ? 'self' : ev.cause;
         break;
       case 'fallAbyss':
-        if (ev.who === 'player') pushFeed('절대 심연에 빠짐 −1', 'alert');
+        if (ev.who === 'player') {
+          // 방금(1.5초 안) 무너진 칸에 빠졌으면 내 칼질이 만든 심연 — 원인 안내를 달리한다
+          const t = world.terrain;
+          const [cx, cy] = t.cellOf(ev.x, ev.y);
+          const i = t.inBounds(cx, cy) ? t.idx(cx, cy) : -1;
+          fellSelf = i >= 0 && t.isCut(i) && world.time - t.cutAt[i] < 1.5;
+          pushFeed(fellSelf ? '발밑이 무너짐 −1' : '절대 심연에 빠짐 −1', 'alert');
+        }
         break;
       case 'restore':
         sfx.restore(ev.cells.length);
@@ -476,8 +516,18 @@ function handleEvents(events: GameEvent[]): void {
   }
 }
 
+/** 쓰러진 까닭과 다음 시도에 쓸 한 줄 */
+const HURT_TEXT: Record<HurtCause | 'self', [string, string]> = {
+  lunge: ['돌진형의 돌진', '웅크려 떨며 붉은 점선이 끝까지 차면 돌진한다 — 옆으로 비키거나 대시(무적)로 지나쳐라'],
+  bolt: ['사격형의 탄', '렌즈가 붉어지면 쏜다 — 더 높은 지형 뒤에 서면 탄이 막힌다'],
+  abyss: ['절대 심연', '평지 대시로는 넓은 균열을 못 건넌다 — 높은 곳에서 대시하면 멀리 활강한다'],
+  self: ['내가 벤 발밑', '조준할 때 붉은 빗금이 내 발밑까지 오면 심연이 된다 — 카인 머리 위 붉은 화살을 보라'],
+};
+
 function showOver(): void {
   const s = world.stats;
+  const cause = lastHurt ? HURT_TEXT[lastHurt] : null;
+  $('over-cause').innerHTML = cause ? `<b>${cause[0]}</b>에 쓰러졌다<br><span>${cause[1]}</span>` : '';
   const terrain = s.kills.fall + s.kills.abyss;
   // 결과는 두 줄: 무엇으로 쓰러뜨렸나(큰 글자) · 어떻게 싸웠나(작은 글자)
   $('over-stats').innerHTML =
@@ -504,6 +554,7 @@ function frame(now: number): void {
         const z = ZONES[zoneIndex];
         const beat = zoneTick(z, world, zstate);
         if (beat !== null && z.beats) {
+          beatCutBase = world.stats.cuts;
           pushFeed(`${z.beatWord ?? '측량'} ${beat + 1}/${z.beats.length} — ${z.beats[beat].name}`);
           sfx.beat();
         }
