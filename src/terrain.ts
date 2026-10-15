@@ -104,6 +104,22 @@ export class Terrain {
    * 0 미만이 되면 심연. restoreSec 뒤 원래 높이로 돌아온다.
    */
   cut(x0: number, y0: number, x1: number, y1: number, now: number, drop: number, radius: number, restoreSec: number): CutResult {
+    const { crossings, cells } = this.previewCut(x0, y0, x1, y1, radius);
+    for (const i of cells) {
+      const nh = this.height[i] - drop;
+      this.height[i] = nh < 0 ? ABYSS : nh;
+      this.restoreAt[i] = now + restoreSec;
+      this.cutAt[i] = now;
+    }
+    if (cells.length) this.version++;
+    return { crossings, cells };
+  }
+
+  /**
+   * 이 선분으로 베면 내려앉을 칸(지형은 바꾸지 않는다). cut과 같은 계산이라 조준 미리보기가 실제 절단과 어긋나지 않는다.
+   * 베인 등고선마다 높은 쪽 칸에서 시작해, 그 등고선 고도 이상인 칸을 반경 안에서 채운다.
+   */
+  previewCut(x0: number, y0: number, x1: number, y1: number, radius: number): CutResult {
     const crossings = this.findCrossings(x0, y0, x1, y1);
     const mark = new Uint8Array(this.w * this.h);
     const cells: number[] = [];
@@ -138,13 +154,6 @@ export class Terrain {
         }
       }
     }
-    for (const i of cells) {
-      const nh = this.height[i] - drop;
-      this.height[i] = nh < 0 ? ABYSS : nh;
-      this.restoreAt[i] = now + restoreSec;
-      this.cutAt[i] = now;
-    }
-    if (cells.length) this.version++;
     return { crossings, cells };
   }
 

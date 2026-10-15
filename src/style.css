@@ -326,6 +326,18 @@ body {
 #hint.quiet {
   opacity: 0.4;
 }
+#over-cause {
+  margin: 0;
+  font-size: calc(6px * var(--s));
+  text-align: center;
+}
+#over-cause b {
+  color: var(--sig-alert);
+}
+#over-cause span {
+  color: var(--dim);
+  font-size: calc(5px * var(--s));
+}
 #over-stats .big {
   font-size: calc(6.5px * var(--s));
 }
@@ -450,15 +462,18 @@ body.pre #hud {
 .grade-B {
   color: var(--dim);
 }
+/* 구역 표제: 지도 귀퉁이의 표제란처럼 — 두 줄 테두리 안에 도면 번호·구역 이름·목표·표고와 진입 방향 */
 #zone-banner {
   position: absolute;
   left: 50%;
-  top: 30%;
+  top: 24%;
   transform: translateX(-50%);
-  padding: calc(3px * var(--s)) calc(10px * var(--s));
-  background: rgba(2, 3, 10, 0.7);
+  padding: calc(3px * var(--s)) calc(12px * var(--s));
+  background: rgba(2, 3, 10, 0.72);
   border-top: calc(0.5px * var(--s)) solid var(--cyan);
   border-bottom: calc(0.5px * var(--s)) solid var(--cyan);
+  outline: calc(0.5px * var(--s)) solid rgba(25, 245, 200, 0.25);
+  outline-offset: calc(1px * var(--s));
   text-align: center;
   font-size: calc(6px * var(--s));
   white-space: nowrap;
@@ -468,6 +483,55 @@ body.pre #hud {
   color: var(--cyan);
   font-size: calc(8px * var(--s));
   letter-spacing: calc(1px * var(--s));
+}
+#zone-banner .cart-top,
+#zone-banner .cart-meta {
+  color: var(--dim);
+  font-size: calc(4.5px * var(--s));
+  letter-spacing: calc(0.5px * var(--s));
+}
+#zone-banner .cart-goal {
+  margin: calc(1px * var(--s)) 0;
+}
+/* 펼쳐짐: 가운데에서 양옆으로 계단식으로 열리고(픽셀 감성), 아래 줄은 그다음에 */
+#zone-banner.anim {
+  animation: cart-open 0.42s steps(10) both;
+}
+#zone-banner.anim .cart-goal,
+#zone-banner.anim .cart-meta {
+  animation: cart-text 0.3s steps(3) 0.35s both;
+}
+#zone-banner.brief {
+  top: 30%;
+}
+#zone-banner.brief.anim {
+  animation-duration: 0.2s;
+}
+#zone-banner.brief.anim .cart-goal {
+  animation-delay: 0.1s;
+}
+@keyframes cart-open {
+  from {
+    clip-path: inset(0 50% 0 50%);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes cart-text {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #zone-banner.anim,
+  #zone-banner.anim .cart-goal,
+  #zone-banner.anim .cart-meta {
+    animation: none;
+  }
 }
 #zone-banner.fade {
   opacity: 0;

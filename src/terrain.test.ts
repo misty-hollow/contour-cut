@@ -30,6 +30,27 @@ describe('등고선 찾기', () => {
   });
 });
 
+describe('절단 미리보기', () => {
+  it('조준 미리보기(previewCut)는 지형을 바꾸지 않고, 실제 절단과 같은 칸을 고른다', () => {
+    const arena = generateArena(7);
+    const lines: [number, number, number, number][] = [
+      [c(40), c(15), c(47), c(15)],
+      [c(10), c(30), c(30), c(5)],
+      [c(60), c(20), c(70), c(22)],
+    ];
+    for (const heights of [labHeights(), arena]) {
+      for (const [x0, y0, x1, y1] of lines) {
+        const t = new Terrain(GRID_W, GRID_H, heights);
+        const before = Int8Array.from(t.height);
+        const pv = t.previewCut(x0, y0, x1, y1, 6);
+        expect(Array.from(t.height)).toEqual(Array.from(before));
+        const res = t.cut(x0, y0, x1, y1, 0, 3, 6, 7);
+        expect([...pv.cells].sort((a, b) => a - b)).toEqual([...res.cells].sort((a, b) => a - b));
+      }
+    }
+  });
+});
+
 describe('절단 → 붕괴', () => {
   it('벤 등고선 안쪽 고지대가 반경 안에서 drop 단계 내려앉고, 반경 밖은 그대로', () => {
     const t = lab();

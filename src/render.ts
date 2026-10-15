@@ -1,7 +1,10 @@
-import { CELL, ENEMY, GRID_H, GRID_W, VIEW_H, VIEW_W, screenY, tune } from './config';
+import { CELL, ENEMY, GRID_H, GRID_W, LEVEL_PX, VIEW_H, VIEW_W, screenY, tune } from './config';
 import { terrainCoversAfterRow } from './input';
 import { drawHound, drawKain, drawKainDown, drawMarker, houndKey, kainKey, markerKey, type HoundPose, type KainPose, type MarkerPose } from './sprites';
 import { isAbyss } from './terrain';
+import { buildTheme, LINE, PLANE_W, TOWER_X, type Mood, type Theme } from './theme';
+
+export { LINE, type Mood };
 import type { Enemy, GameEvent, World } from './world';
 
 /** 조준: 평면 조준점 + 실제 커서 화면 위치 + 잡힌 적 */
@@ -12,19 +15,6 @@ export interface Aim {
   target: Enemy | null;
 }
 
-// 측량 잉크 팔레트: 고도마다 다른 형광색 등고선, 어두운 남색 지면, 심연 테두리는 경고 적색
-export const LINE = ['#2f7bff', '#19f5c8', '#6cff4f', '#e8ff3a', '#ffb02e', '#ff4fa3', '#b77bff'];
-/**
- * 지면 색 = 고도 단계 명도(남색 계단) + 그 고도 등고선 색을 조금 섞은 단채(hypsometric tint).
- * 높을수록 밝고, 같은 높이의 땅은 같은 기운의 색이라 등고선이 끊긴 곳에서도 높이가 읽힌다.
- */
-const RAMP = ['#0a0d1b', '#0c1124', '#151d3c', '#1f2a55', '#2a376c', '#344583', '#3f529a'];
-const TOP = RAMP.map((c, l) => mix(c, LINE[l], 0.05 + 0.015 * l));
-/** 절벽면: 윗면 색을 어둡게. 세로 빗금(지도의 우모선)은 더 어둡게 */
-const WALL = TOP.map((c) => mix(c, '#000000', 0.62));
-const WALL_STRIPE = TOP.map((c) => mix(c, '#000000', 0.8));
-/** 측량 눈금(5칸마다 + 표시). 고도만큼 위로 그려져 높낮이가 눈금 어긋남으로도 보인다 */
-const TICK = TOP.map((c) => mix(c, '#ffffff', 0.13));
 const ABYSS_RIM = '#ff2d55';
 const RIM = '#dffcff';
 const CHASER = '#ff3b3b';
@@ -86,6 +76,8 @@ interface Mark {
 
 /** 구역 시작·재시작 때 플레이어에서 퍼지는 측량 신호가 지도를 드러내는 시간(초). 입력·시뮬레이션은 막지 않는다 */
 const INTRO_SEC = 0.45;
+/** 구역에 처음 들어설 때 측량 주사선이 지도를 그려 나가는 시간(초). 입력·시뮬레이션은 막지 않는다 */
+const SURVEY_SEC = 1.15;
 /** 측량도 휘두르기 표시 시간(초). 판정은 절단 순간 그대로 */
 const SWING_SEC = 0.16;
 /** 공중 추가타 멈춘 한 장의 길이(초, 표시 시간). 시뮬레이션 타격 멈춤(hitstopStrong)과 별개 */
@@ -96,8 +88,6 @@ interface FoePose {
   marker: MarkerPose;
 }
 
-/** 구역 분위기: 떠다니는 입자의 종류(전투 정보 위에 겹쳐도 옅은 1px) */
-export type Mood = 'rift' | 'canyon' | 'restore' | 'plain';
 
 interface Mote {
   x: number;
@@ -108,6 +98,11 @@ interface Mote {
 }
 
 const sy = screenY;
+/** 지도 모눈이 시작하는 화면 y(평면 y = 0, 고도 0) */
+const ORIGIN_GRID = screenY(0, 0);
+/** 표면 무늬 줄 띠: 가장 높이 그려지는 윗면(표고 6)부터 심연 바닥(그리기 높이 −2)까지 */
+const MAX_SHOWN = 6;
+const STRIP_H = (MAX_SHOWN + 2) * LEVEL_PX + CELL;
 
 /** 카메라 상태(관찰용). zoom 1 = 연출 없음 */
 export interface CameraState {
@@ -138,6 +133,8 @@ export class Renderer {
   /** 늦게 터지는 먼지(침하가 다 내려앉는 순간) */
   private later: { t: number; run: () => void }[] = [];
   private introT = INTRO_SEC;
+  private surveyT = SURVEY_SEC;
+  private surveyDir: 'north' | 'east' = 'north';
   private frameDt = 0;
   /** 카인 애니메이션 상태(표시 전용) */
   private kain = { px: NaN, py: NaN, phase: 0, mirror: false, turnT: 0, landT: 0, wasAir: false, slashT: 9, slashAng: 0, overT: 0 };
@@ -147,10 +144,14 @@ export class Renderer {
   private impactAt: { x: number; y: number } | null = null;
   /** 공중 추가타와 같은 칼질로 다시 베인 칸: 섬광을 죽여 타격이 먼저 읽히게 한다(시뮬레이션 시각까지) */
   private flashMute = new Float64Array(GRID_W * GRID_H).fill(-Infinity);
+  /** 절단 미리보기 칸 표시(1 침하, 2 심연). 그릴 때만 채우고 바로 비운다 */
+  private pvMask = new Uint8Array(GRID_W * GRID_H);
   /** 적별 걸음 위상(표시 전용) */
   private foes = new Map<number, { px: number; py: number; phase: number }>();
   /** 타이틀 화면: 지도를 위에서 아래로 훑는 측량 주사선 */
   titleScan = false;
+  /** 처음 벨 곳: 이 원 안의 등고선이 흰색으로 깜빡인다(안내만, main이 정한다) */
+  focus: { cx: number; cy: number; r: number } | null = null;
   private mood: Mood = 'plain';
   private motes: Mote[] = [];
   private vignette: HTMLCanvasElement;
@@ -158,7 +159,15 @@ export class Renderer {
   private shakeDur = 0;
   private shakeAmp = 0;
   private hurtT = 0;
-  private bg: HTMLCanvasElement;
+  /** 구역 재질(지형이 바뀌는 구역 진입마다 다시 만든다) */
+  private theme: Theme | null = null;
+  private themeOf: { world: World; mood: Mood } | null = null;
+  /** 줄마다 표면 무늬를 합성해 둔 띠(재질이 바뀌면 비운다) */
+  private strips: { c: HTMLCanvasElement; g: CanvasRenderingContext2D; key: string }[] = [];
+  /** 심연 가장자리 칸(무너지는 흙 부스러기 연출용). 지형 판 번호가 바뀌면 다시 센다 */
+  private rims: number[] = [];
+  private rimsVer = -1;
+  private rimsWorld: World | null = null;
   private clock = 0;
   private restoredAt = new Float64Array(GRID_W * GRID_H).fill(-Infinity);
   /** 순간 줌인(주요 타격)과 대시 낙하 줌아웃 */
@@ -179,7 +188,6 @@ export class Renderer {
     this.view.height = VIEW_H;
     this.ctx = this.view.getContext('2d')!;
     this.ctx.imageSmoothingEnabled = false;
-    this.bg = makeBackground();
     this.vignette = makeVignette();
     this.setMood('plain');
     this.resize(1);
@@ -348,7 +356,8 @@ export class Renderer {
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
-    ctx.drawImage(this.bg, 0, 0);
+    const theme = this.themeFor(world);
+    ctx.drawImage(theme.horizon, 0, 0);
     this.drawBeaconLight();
 
     const p = world.player;
@@ -361,7 +370,9 @@ export class Renderer {
     rows[rowOf(p.y)].push(() => this.drawPlayer(world));
 
     for (let cy = 0; cy < GRID_H; cy++) {
-      for (let cx = 0; cx < GRID_W; cx++) this.drawCell(world, cx, cy);
+      for (let cx = 0; cx < GRID_W; cx++) this.drawCellBody(world, cx, cy);
+      this.drawSurfaceRow(world, cy);
+      for (let cx = 0; cx < GRID_W; cx++) this.drawCellEdges(world, cx, cy);
       this.drawGhostRow(world, cy);
       for (const f of rows[cy]) f();
     }
@@ -371,11 +382,13 @@ export class Renderer {
     if (world.marker) this.drawBeacon(world, world.marker, '#19f5c8');
     this.drawBolts(world);
     if (aim && world.mode === 'play') this.drawAim(world, aim);
+    this.crumble(world, dt);
     this.drawMotes(dt);
     ctx.drawImage(this.vignette, 0, 0);
     this.drawImpact(world, dt);
     this.drawFx(dt);
     if (this.titleScan) this.drawScan();
+    this.drawSurvey(dt);
     this.drawIntro(world, dt);
     this.present(world, dt);
   }
@@ -437,26 +450,58 @@ export class Renderer {
     }
   }
 
-  private drawCell(world: World, cx: number, cy: number): void {
+  /** 이 세계·분위기의 재질. 구역 진입(새 World)이나 분위기가 바뀌면 다시 만든다 */
+  private themeFor(world: World): Theme {
+    const o = this.themeOf;
+    if (!this.theme || !o || o.world !== world || o.mood !== this.mood) {
+      this.theme = buildTheme(this.mood, world.terrain.base);
+      this.themeOf = { world, mood: this.mood };
+      for (const st of this.strips) if (st) st.key = '';
+    }
+    return this.theme;
+  }
+
+  /** ① 칸의 몸: 남쪽 절벽면과 윗면 바탕색(심연이면 심연 전부) */
+  private drawCellBody(world: World, cx: number, cy: number): void {
     const ctx = this.ctx;
+    const th = this.theme!;
     const t = world.terrain;
     const i = t.idx(cx, cy);
     const h = t.height[i];
     const s = t.shown[i];
     const x = cx * CELL;
     const top = sy(cy * CELL, s);
-    const now = world.time;
 
-    // 남쪽 절벽면: 윗면 색을 어둡게 한 면 + 세로 빗금(우모선) + 고도마다 지층선
+    // 남쪽 절벽면: 윗면 색을 어둡게 한 면(협곡은 지층 띠) + 세로 빗금(우모선) + 고도마다 지층선
     const sShown = cy + 1 < GRID_H ? t.shown[i + GRID_W] : 0;
     const southTop = sy((cy + 1) * CELL, sShown);
     const wallTop = top + CELL;
     if (southTop > wallTop) {
       const wl = Math.max(0, Math.min(6, Math.floor(s)));
-      ctx.fillStyle = WALL[wl];
+      ctx.fillStyle = th.wall[wl];
       ctx.fillRect(x, wallTop, CELL, southTop - wallTop);
-      ctx.fillStyle = WALL_STRIPE[wl];
+      if (th.strata) {
+        // 지층 띠: 고도 한 단마다 다른 퇴적층(옆 칸과 이어지게 절대 고도로 고른다)
+        for (let lv = Math.ceil(s) - 1; lv >= Math.max(-2, Math.floor(sShown)); lv--) {
+          const y0 = Math.max(wallTop, sy((cy + 1) * CELL, lv + 1));
+          const y1 = Math.min(southTop, sy((cy + 1) * CELL, lv));
+          if (y1 <= y0) continue;
+          ctx.fillStyle = th.strata[(lv + 7) % th.strata.length];
+          ctx.fillRect(x, y0, CELL, y1 - y0);
+          ctx.fillStyle = '#000000';
+          ctx.globalAlpha = 0.35;
+          ctx.fillRect(x, y1 - 1, CELL, 1);
+          ctx.globalAlpha = 1;
+        }
+      }
+      ctx.fillStyle = th.wallStripe[wl];
+      ctx.globalAlpha = th.strata ? 0.55 : 1;
       for (let k = (cx & 1) * 3; k < CELL; k += 3) ctx.fillRect(x + k, wallTop, 1, southTop - wallTop);
+      if (th.vein && cx % 4 === 1) {
+        ctx.fillStyle = th.vein;
+        ctx.globalAlpha = 0.13 + 0.05 * Math.sin(this.clock * 1.6 + cx);
+        ctx.fillRect(x + 2, wallTop + 1, 1, southTop - wallTop - 1);
+      }
       ctx.globalAlpha = 0.55;
       for (let lv = Math.floor(s) - 1; lv > sShown - 0.01 && lv >= 0; lv--) {
         ctx.fillStyle = LINE[lv + 1 > 6 ? 6 : lv + 1];
@@ -487,25 +532,101 @@ export class Renderer {
       }
       return;
     }
-
-    const lvl = Math.min(6, h);
-    ctx.fillStyle = TOP[lvl];
+    ctx.fillStyle = th.top[Math.min(6, h)];
     ctx.fillRect(x, top, CELL, CELL);
+  }
 
-    // 그늘: 서쪽(빛이 오는 쪽)이 더 높으면 그 높이만큼 띠, 북쪽 절벽 밑동에는 얇은 접지 그늘
-    const sw = cx > 0 ? t.shown[i - 1] : s;
+  /**
+   * ② 표면 무늬: 같은 높이·같은 땅(원래 바닥/높은 땅)이 이어진 칸을 한 번에 덧그린다.
+   * 무늬는 평면 좌표에 붙어 있어 땅이 내려앉고 솟을 때 함께 움직인다. 바닥에는 숨쉬는 빛(불씨·기억 고리)과 흐르는 안개
+   */
+  private drawSurfaceRow(world: World, cy: number): void {
+    const th = this.theme!;
+    if (th.mood === 'plain') return;
+    const t = world.terrain;
+    const y0 = cy * CELL;
+    const frame = th.surfaceFps ? Math.floor(this.clock * th.surfaceFps) % th.surface.length : 0;
+    // 안개는 2px씩 초당 3.5번 흐른다(띠를 다시 합성하는 횟수를 줄인다)
+    const fogX = th.fog ? (Math.floor(this.clock * 3.5) * 2) % PLANE_W : 0;
+    // 줄 띠: 그 줄의 칸 높이·심연과 무늬 장·안개 위치가 같으면 지난번에 합성한 띠를 그대로 한 번에 옮긴다
+    const stripY = sy(y0, MAX_SHOWN);
+    let key = `${frame}:${fogX}:`;
+    let lo = STRIP_H;
+    let hi = 0;
+    for (let cx = 0; cx < GRID_W; cx++) {
+      const i = t.idx(cx, cy);
+      const off = sy(y0, t.shown[i]) - stripY;
+      lo = Math.min(lo, off);
+      hi = Math.max(hi, off + CELL);
+      key += String.fromCharCode(48 + (isAbyss(t.height[i]) ? 99 : off));
+    }
+    let strip = this.strips[cy];
+    if (!strip) {
+      const c = document.createElement('canvas');
+      c.width = VIEW_W;
+      c.height = STRIP_H;
+      strip = this.strips[cy] = { c, g: c.getContext('2d')!, key: '' };
+    }
+    if (strip.key !== key) {
+      strip.key = key;
+      const g = strip.g;
+      g.clearRect(0, 0, VIEW_W, STRIP_H);
+      const tex = th.surface[frame];
+      let cx = 0;
+      while (cx < GRID_W) {
+        const i = t.idx(cx, cy);
+        const abyss = isAbyss(t.height[i]);
+        const top = sy(y0, t.shown[i]) - stripY;
+        let n = 1;
+        while (cx + n < GRID_W && isAbyss(t.height[i + n]) === abyss && sy(y0, t.shown[i + n]) - stripY === top) n++;
+        const x = cx * CELL;
+        const w = n * CELL;
+        // 땅에는 무늬, 심연 위로는 협곡 안개가 피어오르고(깊이), 협곡 바닥(표고 0)에는 흐르는 안개
+        if (!abyss) g.drawImage(tex, x, y0, w, CELL, x, top, w, CELL);
+        if (th.fog && (abyss || t.shown[i] < 0.5)) g.drawImage(th.fog, x + fogX, y0, w, CELL, x, top, w, CELL);
+        cx += n;
+      }
+    }
+    // 띠 중 그 줄의 윗면이 있는 높이만 옮긴다(평평한 줄은 한 칸 높이)
+    lo = Math.max(0, lo);
+    hi = Math.min(STRIP_H, hi);
+    if (hi > lo) this.ctx.drawImage(strip.c, 0, lo, VIEW_W, hi - lo, 0, stripY + lo, VIEW_W, hi - lo);
+  }
+
+  /** ③ 칸의 윗면 위: 그림자, 측량 눈금, 등고선 */
+  private drawCellEdges(world: World, cx: number, cy: number): void {
+    const ctx = this.ctx;
+    const th = this.theme!;
+    const t = world.terrain;
+    const i = t.idx(cx, cy);
+    const h = t.height[i];
+    if (isAbyss(h)) return;
+    const s = t.shown[i];
+    const x = cx * CELL;
+    const top = sy(cy * CELL, s);
+    const now = world.time;
+    const lvl = Math.min(6, h);
+
+    // 그늘: 서쪽(빛이 오는 쪽)이 더 높으면 그 높이만큼 띠(협곡은 길게 — 몇 칸 너머 단애의 그림자까지), 북쪽 절벽 밑동에는 얇은 접지 그늘
+    const sh = th.shadow;
+    let len = 0;
+    for (let k = 1; k <= sh.reach && cx - k >= 0; k++) {
+      const d = t.shown[i - k] - s;
+      if (d > 0.5) len = Math.max(len, Math.round(d * sh.slope) - (k - 1) * CELL);
+    }
+    len = Math.min(sh.cap, len);
     const sn = cy > 0 ? t.shown[i - GRID_W] : s;
-    if (sw > s + 0.5 || sn > s + 0.5) {
+    if (len > 0 || sn > s + 0.5) {
       ctx.fillStyle = '#000000';
-      ctx.globalAlpha = 0.38;
-      if (sw > s + 0.5) ctx.fillRect(x, top, Math.min(4, Math.round((sw - s) * 1.3)), CELL);
+      ctx.globalAlpha = sh.alpha;
+      if (len > 0) ctx.fillRect(x, top, len, CELL);
       if (sn > s + 0.5) ctx.fillRect(x, top, CELL, sn - s > 1.5 ? 2 : 1);
       ctx.globalAlpha = 1;
     }
 
     // 측량 눈금: 5칸마다 작은 +
     if (cx % 5 === 0 && cy % 5 === 0) {
-      ctx.fillStyle = TICK[lvl];
+      ctx.fillStyle = th.tick[lvl];
       ctx.fillRect(x - 1, top, 3, 1);
       ctx.fillRect(x, top - 1, 1, 3);
     }
@@ -518,7 +639,11 @@ export class Renderer {
     const he = cx < GRID_W - 1 ? t.height[i + 1] : 99;
     const hn = cy > 0 ? t.height[i - GRID_W] : 99;
     const hs = cy < GRID_H - 1 ? t.height[i + GRID_W] : 99;
-    const col = (nh: number) => (isAbyss(nh) ? ABYSS_RIM : flash ? '#ffffff' : restoring ? '#bff7ff' : LINE[lvl]);
+    const f = this.focus;
+    const lure = !!f && Math.floor(this.clock * 2.6) % 2 === 0 && (cx - f.cx) ** 2 + (cy - f.cy) ** 2 <= f.r * f.r;
+    const fr = this.surveyFront();
+    const scanned = fr !== null && (this.surveyDir === 'north' ? top - fr : fr - x) >= 0 && (this.surveyDir === 'north' ? top - fr : fr - x) < 18;
+    const col = (nh: number) => (isAbyss(nh) ? ABYSS_RIM : flash || lure || scanned ? '#ffffff' : restoring ? '#bff7ff' : LINE[lvl]);
     if (edge(hn)) this.edgeLine(x, top, CELL, 1, col(hn), 0, 1);
     if (edge(hs)) this.edgeLine(x, top + CELL - 1, CELL, 1, col(hs), 0, -1);
     if (edge(hw)) this.edgeLine(x, top, 1, CELL, col(hw), 1, 0);
@@ -801,6 +926,11 @@ export class Renderer {
       ctx.fillRect(x - 1, y - 16, 3, 1);
       ctx.fillRect(x, y - 15, 1, 1);
     }
+    // 곧 솟는 땅 위의 적: 위를 가리키는 시안 화살(환원 순간 에어본 — 공중 추가타 기회)
+    const [ecx, ecy] = t.cellOf(e.x, e.y);
+    const ei = t.inBounds(ecx, ecy) ? t.idx(ecx, ecy) : -1;
+    if (ei >= 0 && !e.airborne && t.isCut(ei) && t.base[ei] > t.height[ei] && t.restoreAt[ei] - world.time < tune.restoreWarnSec + 0.4 && Math.floor(this.clock * 8) % 2 === 0)
+      chevrons(ctx, x, y - 20, '#19f5c8', 2, true);
     if (e.state === 'stun') {
       ctx.fillStyle = '#e8ff3a';
       const a = this.clock * 10;
@@ -928,6 +1058,27 @@ export class Renderer {
     ctx.fillRect(x, y - 6, 1, 1);
   }
 
+  /** 심연 가장자리에서 흙 부스러기가 이따금 떨어진다(균열 지대는 더 자주): 무너진 땅이 아직 불안정하다 */
+  private crumble(world: World, dt: number): void {
+    const t = world.terrain;
+    if (this.rimsWorld !== world || this.rimsVer !== t.version) {
+      this.rimsWorld = world;
+      this.rimsVer = t.version;
+      this.rims = [];
+      for (let i = GRID_W; i < t.height.length; i++) if (isAbyss(t.height[i]) && !isAbyss(t.height[i - GRID_W])) this.rims.push(i);
+    }
+    if (!this.rims.length || world.mode !== 'play') return;
+    const rate = (this.mood === 'rift' ? 10 : 4) * Math.min(1, this.rims.length / 12);
+    if (Math.random() >= rate * dt) return;
+    const i = this.rims[Math.floor(Math.random() * this.rims.length)];
+    const cx = i % GRID_W;
+    const cy = (i - cx) / GRID_W;
+    const lip = sy(cy * CELL, t.shown[i - GRID_W]);
+    const x = (cx + Math.random()) * CELL;
+    for (let q = Math.random() < 0.3 ? 3 : 1; q > 0; q--)
+      this.particles.push({ x: x + q, y: lip, vx: (Math.random() - 0.5) * 6, vy: 4 + Math.random() * 6, life: 0.9, max: 0.9, color: q === 1 ? '#5a4f6e' : '#3a3248', g: 70, size: 1 });
+  }
+
   /** 구역마다 다른 공기: 균열 지대는 심연에서 오르는 불티, 접힘 협곡은 동쪽으로 부는 먼지, 환원 구역은 떠오르는 시안 입자 */
   setMood(m: Mood): void {
     this.mood = m;
@@ -1009,6 +1160,61 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
+  /** 구역에 처음 들어설 때: 진입 방향에서 측량 주사선이 지도를 그려 나간다(남쪽 진입 = 북쪽으로, 서쪽 진입 = 동쪽으로) */
+  beginSurvey(dir: 'north' | 'east'): void {
+    if (tune.shake === 0 && tune.zoomFx === 0) return;
+    this.surveyDir = dir;
+    this.surveyT = 0;
+    this.introT = INTRO_SEC;
+  }
+
+  /** 주사선 앞머리 위치(화면 px: 북쪽 진행이면 y, 동쪽 진행이면 x). 측량 중이 아니면 null */
+  private surveyFront(): number | null {
+    if (this.surveyT >= SURVEY_SEC) return null;
+    const k = this.surveyT / SURVEY_SEC;
+    const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+    return this.surveyDir === 'north' ? Math.round(VIEW_H + 12 - e * (VIEW_H + 40)) : Math.round(-12 + e * (VIEW_W + 40));
+  }
+
+  /** 아직 측량되지 않은 쪽은 어두운 청사진(모눈만), 주사선 바로 뒤의 등고선은 흰색으로 그려진다(drawCellEdges) */
+  private drawSurvey(dt: number): void {
+    const fr = this.surveyFront();
+    if (fr === null) return;
+    this.surveyT += dt;
+    const ctx = this.ctx;
+    const north = this.surveyDir === 'north';
+    ctx.fillStyle = '#04050a';
+    ctx.globalAlpha = 0.9;
+    if (north) ctx.fillRect(0, 0, VIEW_W, Math.max(0, fr));
+    else ctx.fillRect(Math.max(0, fr), 0, VIEW_W, VIEW_H);
+    // 청사진 모눈: 5칸(30px)마다
+    ctx.fillStyle = '#19f5c8';
+    ctx.globalAlpha = 0.1;
+    if (north) {
+      for (let x = 0; x < VIEW_W; x += 30) ctx.fillRect(x, 0, 1, Math.max(0, fr));
+      for (let y = ORIGIN_GRID; y < fr; y += 30) ctx.fillRect(0, y, VIEW_W, 1);
+    } else {
+      for (let x = 0; x < VIEW_W; x += 30) if (x > fr) ctx.fillRect(x, 0, 1, VIEW_H);
+      for (let y = ORIGIN_GRID; y < VIEW_H; y += 30) ctx.fillRect(Math.max(0, fr), y, VIEW_W, 1);
+    }
+    // 주사선과 그 뒤로 옅어지는 빛
+    for (let k = 0; k < 12; k++) {
+      ctx.globalAlpha = 0.22 * (1 - k / 12);
+      if (north) ctx.fillRect(0, fr + k, VIEW_W, 1);
+      else ctx.fillRect(fr - k, 0, 1, VIEW_H);
+    }
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = '#bff7ff';
+    if (north) ctx.fillRect(0, fr, VIEW_W, 1);
+    else ctx.fillRect(fr, 0, 1, VIEW_H);
+    // 자 눈금이 주사선을 따라 흐른다
+    ctx.fillStyle = '#19f5c8';
+    ctx.globalAlpha = 0.8;
+    if (north) for (let x = 0; x < VIEW_W; x += 6) ctx.fillRect(x, fr - (x % 30 === 0 ? 3 : 1), 1, x % 30 === 0 ? 3 : 1);
+    else for (let y = ORIGIN_GRID; y < VIEW_H; y += 6) ctx.fillRect(fr + 1, y, (y - ORIGIN_GRID) % 30 === 0 ? 3 : 1, 1);
+    ctx.globalAlpha = 1;
+  }
+
   /** 구역 시작·재시작: 플레이어에서 퍼지는 측량 신호 고리 안쪽만 지도가 보인다(INTRO_SEC 동안) */
   private drawIntro(world: World, dt: number): void {
     if (this.introT >= INTRO_SEC) return;
@@ -1055,6 +1261,7 @@ export class Renderer {
     this.beams = [];
     this.later = [];
     this.introT = 0;
+    this.surveyT = SURVEY_SEC;
     this.foes.clear();
     this.impactT = 0;
     this.flashMute.fill(-Infinity);
@@ -1081,6 +1288,7 @@ export class Renderer {
     ctx.fillStyle = ready ? '#bff7ff' : '#3c4766';
     for (let s = 4; s <= tune.bladeLen; s += 3) ctx.fillRect(Math.round(p.x + dx * s), sy(p.y + dy * s, p.z) - 4, 1, 1);
     if (ready) {
+      this.drawCutPreview(world, p.x + dx * tune.bladeLen, p.y + dy * tune.bladeLen);
       const cr = world.terrain.findCrossings(p.x, p.y, p.x + dx * tune.bladeLen, p.y + dy * tune.bladeLen);
       const on = Math.floor(this.clock * 8) % 2 === 0;
       for (const c of cr) {
@@ -1110,6 +1318,55 @@ export class Renderer {
     ctx.fillRect(ax + 2, ay, 3, 1);
     ctx.fillRect(ax, ay - 4, 1, 3);
     ctx.fillRect(ax, ay + 2, 1, 3);
+  }
+
+  /**
+   * 절단 미리보기: 지금 베면 내려앉을 땅을 빗금과 점선 테두리로(흰색 = 침하, 적색 = 절대 심연), 그 위의 적에게 운명 표시를 단다.
+   * 실제 절단과 같은 계산(Terrain.previewCut)이라 보이는 그대로 무너진다. 내 발밑이 심연이 되면 카인 머리 위에 경고.
+   */
+  private drawCutPreview(world: World, x1: number, y1: number): void {
+    const t = world.terrain;
+    const p = world.player;
+    const pv = t.previewCut(p.x, p.y, x1, y1, tune.cutRadius);
+    if (!pv.cells.length) return;
+    const ctx = this.ctx;
+    const set = this.pvMask;
+    for (const i of pv.cells) set[i] = t.height[i] - tune.cutDrop < 0 ? 2 : 1;
+    const phase = Math.floor(this.clock * 10);
+    const inSet = (cx: number, cy: number) => cx >= 0 && cy >= 0 && cx < GRID_W && cy < GRID_H && set[cy * GRID_W + cx] > 0;
+    for (const i of pv.cells) {
+      const cx = i % GRID_W;
+      const cy = (i - cx) / GRID_W;
+      const x = cx * CELL;
+      const top = sy(cy * CELL, t.shown[i]);
+      ctx.fillStyle = set[i] === 2 ? ABYSS_RIM : '#ffffff';
+      // 빗금: 고정 무늬(조준을 움직여도 반짝이지 않게)
+      ctx.globalAlpha = set[i] === 2 ? 0.26 : 0.16;
+      for (let m = 0; m < CELL; m++) for (let k = (m + top + x) & 3 ? 4 - ((m + top + x) & 3) : 0; k < CELL; k += 4) ctx.fillRect(x + k, top + m, 1, 1);
+      // 테두리: 흐르는 점선
+      ctx.globalAlpha = 0.85;
+      const dash = (x0: number, y0: number, ddx: number, ddy: number) => {
+        for (let k = 0; k < CELL; k++) if (((x0 + y0 + k + phase) & 3) < 2) ctx.fillRect(x0 + ddx * k, y0 + ddy * k, 1, 1);
+      };
+      if (!inSet(cx, cy - 1)) dash(x, top, 1, 0);
+      if (!inSet(cx, cy + 1)) dash(x, top + CELL - 1, 1, 0);
+      if (!inSet(cx - 1, cy)) dash(x, top, 0, 1);
+      if (!inSet(cx + 1, cy)) dash(x + CELL - 1, top, 0, 1);
+    }
+    ctx.globalAlpha = 1;
+    // 운명 표시: 심연(적색 두 겹) · 낙하로 쓰러짐(주황 두 겹) · 낙하 피해(주황 한 겹)
+    const fallDmg = tune.cutDrop >= 1.5 ? Math.round(tune.cutDrop) - 1 : 0;
+    for (const e of world.enemies) {
+      if (e.state === 'dead' || e.state === 'spawn' || e.state === 'launched' || e.airborne) continue;
+      const [ecx, ecy] = t.cellOf(e.x, e.y);
+      const v = t.inBounds(ecx, ecy) ? set[t.idx(ecx, ecy)] : 0;
+      if (!v) continue;
+      const lethal = v === 2 || fallDmg >= e.hp;
+      chevrons(ctx, Math.round(e.x), sy(e.y, e.z) - 24, v === 2 ? ABYSS_RIM : '#ffb02e', lethal ? 2 : 1);
+    }
+    const [pcx, pcy] = t.cellOf(p.x, p.y);
+    if (t.inBounds(pcx, pcy) && set[t.idx(pcx, pcy)] === 2 && Math.floor(this.clock * 6) % 2 === 0) chevrons(ctx, Math.round(p.x), sy(p.y, p.z) - 22, ABYSS_RIM, 2);
+    for (const i of pv.cells) set[i] = 0;
   }
 
   private drawFx(dt: number): void {
@@ -1208,9 +1465,6 @@ export class Renderer {
   }
 }
 
-/** 원점 타워가 지평선에 서 있는 x(내부 화면 px) */
-const TOWER_X = 240;
-
 /** 가장자리를 눌러 시선을 가운데로 모으는 비네트(한 번 만들어 둔다) */
 function makeVignette(): HTMLCanvasElement {
   const c = document.createElement('canvas');
@@ -1225,12 +1479,20 @@ function makeVignette(): HTMLCanvasElement {
   return c;
 }
 
-/** 두 #rrggbb 색을 t(0~1)만큼 섞는다 */
-function mix(a: string, b: string, t: number): string {
-  const pa = parseInt(a.slice(1), 16);
-  const pb = parseInt(b.slice(1), 16);
-  const ch = (s: number) => Math.round(((pa >> s) & 255) * (1 - t) + ((pb >> s) & 255) * t);
-  return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, '0')}`;
+/** 측량 화살 n겹(기본 아래 ⌄, up이면 위 ⌃), 어두운 그림자 위에 */
+function chevrons(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, n: number, up = false): void {
+  for (let q = 0; q < n; q++) {
+    const yy = y + q * 3;
+    for (const [c, oy] of [['#000000', 1], [color, 0]] as const) {
+      ctx.fillStyle = c;
+      const row = (k: number) => yy + oy + (up ? 2 - k : k);
+      ctx.fillRect(x - 2, row(0), 1, 1);
+      ctx.fillRect(x + 2, row(0), 1, 1);
+      ctx.fillRect(x - 1, row(1), 1, 1);
+      ctx.fillRect(x + 1, row(1), 1, 1);
+      ctx.fillRect(x, row(2), 1, 1);
+    }
+  }
 }
 
 function pixLine(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number, color: string): void {
@@ -1248,36 +1510,3 @@ function pixCircle(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: num
     ctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r * 0.6), 1, 1);
   }
 }
-
-/** 배경: 거대한 종이 지도의 모눈과 접힌 자국 */
-function makeBackground(): HTMLCanvasElement {
-  const c = document.createElement('canvas');
-  c.width = VIEW_W;
-  c.height = VIEW_H;
-  const g = c.getContext('2d')!;
-  g.fillStyle = '#04050a';
-  g.fillRect(0, 0, VIEW_W, VIEW_H);
-  // 먼 지평선: 접힌 단애의 실루엣 두 겹과 세계 중심의 원점 타워(Benchmark Zero)
-  for (let x = 0; x < VIEW_W; x++) {
-    const far = 7 + Math.round(2.5 * Math.sin(x * 0.031) + 1.5 * Math.sin(x * 0.097 + 1.3));
-    const near = 10 + Math.round(1.5 * Math.sin(x * 0.053 + 2.1) + Math.sin(x * 0.17));
-    g.fillStyle = '#0a0d1d';
-    g.fillRect(x, far, 1, 13 - far);
-    g.fillStyle = '#0e1226';
-    g.fillRect(x, near, 1, 13 - near);
-  }
-  g.fillStyle = '#1a2142';
-  g.fillRect(TOWER_X, 2, 1, 11);
-  g.fillRect(TOWER_X - 1, 6, 3, 7);
-  g.fillRect(TOWER_X - 2, 10, 5, 3);
-  g.fillStyle = '#2a3463';
-  g.fillRect(TOWER_X - 3, 4, 7, 1);
-  // 지도 윗변 자: 5칸(30px)마다 큰 눈금, 1칸마다 작은 눈금 — 지면의 측량 눈금(+)과 열이 맞는다
-  g.fillStyle = '#121833';
-  g.fillRect(0, 13, VIEW_W, 1);
-  for (let x = 0; x < VIEW_W; x += 6) g.fillRect(x, 14, 1, x % 30 === 0 ? 3 : 1);
-  g.fillStyle = '#1d2750';
-  for (let x = 0; x < VIEW_W; x += 30) g.fillRect(x, 10, 1, 3);
-  return c;
-}
-

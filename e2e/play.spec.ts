@@ -316,6 +316,8 @@ test('게임 오버 → R로 다시 시작', async ({ page }) => {
   await expect.poll(async () => (await snap(page)).mode, { timeout: 25_000, message: '게임 오버' }).toBe('over');
   await expect(page.getByTestId('over')).toBeVisible();
   await expect(page.locator('#over-stats')).toContainText('절단');
+  // 쓰러진 까닭과 다음 시도에 쓸 한 줄(돌진형·사격형·심연·내 발밑 중 하나)
+  await expect(page.getByTestId('over-cause')).toContainText(/(돌진형의 돌진|사격형의 탄|절대 심연|내가 벤 발밑)에 쓰러졌다/);
   await shot(page, '09-over');
   await page.keyboard.press('KeyR');
   await expect(page.getByTestId('over')).toBeHidden();
